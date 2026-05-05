@@ -19,7 +19,6 @@ def calculate_bands(data, type_name):
     tp = (data['High'] + data['Low'] + data['Close']) / 3
     ma = tp.rolling(window=20).mean()
     std = tp.rolling(window=20).std()
-    
     res = {f"{type_name} 중심": ma}
     for s in STD_LIST:
         res[f"{type_name} {s}상"] = ma + (std * s)
@@ -39,14 +38,18 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             
             recent_idx = d_raw.index[-20:]
             last_date = recent_idx[-1]
-            next_date = last_date + pd.Timedelta(days=1)
+            # 예측 날짜를 단순 문자열 처리하여 휴일 빈칸 방지
+            next_date_str = (last_date + pd.Timedelta(days=1)).strftime('%m/%d')
             
+            # X축 표시용 리스트 (문자열로 변환하여 휴일 제거)
+            date_labels = [d.strftime('%m/%d') for d in recent_idx] + [next_date_str]
+            x_range = list(range(len(date_labels))) # 숫자 인덱스로 축 관리
+
             fig = go.Figure()
             c_up = ['#FFCCCC', '#FF6666', '#FF0000']
             c_lo = ['#CCCCFF', '#6666FF', '#0000FF']
 
-            # 1. 일봉 차트 그리기
-            # 모든 일봉 라인(중심 + 6개 밴드)에 대해 개별 기울기 적용
+            # 1. 일봉 및 예측선
             d_keys = list(d_bands.keys())
             for key in d_keys:
                 if '중심' in key: color = 'purple'
@@ -54,33 +57,39 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 else: color = c_lo[STD_LIST.index(float(key.split()[1][:-1]))]
                 
                 # 과거 실선
-                fig.add_trace(go.Scatter(x=recent_idx, y=d_bands[key].iloc[-20:], name=key, line=dict(color=color, width=1)))
+                y_vals = d_bands[key].iloc[-20:].tolist()
+                fig.add_trace(go.Scatter(x=x_range[:-1], y=y_vals, name=key, line=dict(color=color, width=1)))
                 
-                # 미래 예측 (해당 선의 개별 기울기: 오늘값 - 어제값)
+                # 미래 예측 (+1일 개별 기울기 연결)
                 slope = d_bands[key].iloc[-1] - d_bands[key].iloc[-2]
                 pred_val = d_bands[key].iloc[-1] + slope
-                fig.add_trace(go.Scatter(x=[last_date, next_date], y=[d_bands[key].iloc[-1], pred_val], 
+                fig.add_trace(go.Scatter(x=[x_range[-2], x_range[-1]], y=[y_vals[-1], pred_val], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
 
-            # 2. 주봉 차트 그리기
+            # 2. 주봉 및 예측선
             w_keys = list(w_bands.keys())
             for key in w_keys:
                 if '중심' in key: color = 'green'
                 elif '상' in key: color = c_up[STD_LIST.index(float(key.split()[1][:-1]))]
                 else: color = c_lo[STD_LIST.index(float(key.split()[1][:-1]))]
                 
-                # 과거 (월요일 등 주의 첫 영업일 데이터만 추출)
+                # 과거 주봉 매칭 (데이터가 있는 지점만 추출)
                 w_sub = w_bands[key][w_bands[key].index >= recent_idx[0]]
-                fig.add_trace(go.Scatter(x=w_sub.index, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
+                w_x = []
+                for dt in w_sub.index:
+                    if dt.strftime('%m/%d') in date_labels:
+                        w_x.append(date_labels.index(dt.strftime('%m/%d')))
                 
-                # 주봉 미래 예측 (주봉도 해당 선의 개별 기울기 적용하여 +1일 연결)
+                fig.add_trace(go.Scatter(x=w_x, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
+                
+                # 주봉 미래 예측
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
                 w_pred_val = w_bands[key].iloc[-1] + w_slope
-                fig.add_trace(go.Scatter(x=[last_date, next_date], y=[w_bands[key].iloc[-1], w_pred_val], 
+                fig.add_trace(go.Scatter(x=[x_range[-2], x_range[-1]], y=[w_sub.values[-1], w_pred_val], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
 
-            # 현재가 실선 (5/4에서 끝남)
-            fig.add_trace(go.Scatter(x=recent_idx, y=d_raw['Close'].iloc[-20:], name='현재가', line=dict(color='black', width=2)))
+            # 현재가 실선
+            fig.add_trace(go.Scatter(x=x_range[:-1], y=d_raw['Close'].iloc[-20:], name='현재가', line=dict(color='black', width=2)))
 
             # 레이아웃 설정
             y_min = float(d_raw['Close'].iloc[-20:].min() * 0.96)
@@ -88,15 +97,20 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
 
             fig.update_layout(
                 height=500, margin=dict(l=5, r=5, t=30, b=5),
-                xaxis=dict(tickformat='%m/%d', range=[recent_idx[0], next_date]),
-                yaxis=dict(range=[y_min, y_max], autorange=False),
+                xaxis=dict(
+                    tickmode='array',
+                    tickvals=x_range,
+                    ticktext=date_labels,
+                    range=[x_range[0], x_range[-1]]
+                ),
+                yaxis=dict(range=[y_min, y_max], autorange=False, tickformat=","), # 천 단위 콤마
                 showlegend=False, hovermode='x unified'
             )
             
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 3. 하단 리스트 (개별 기울기 반영)
+            # 3. 하단 리스트 (천 단위 콤마 적용)
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             with c1:

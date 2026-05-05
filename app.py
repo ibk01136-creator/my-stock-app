@@ -6,32 +6,14 @@ from datetime import timedelta
 
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
-# 종목 리스트 (LIG디펜스, HD일렉트릭 반영)
 STOCKS = {
-    "SK하이닉스": "000660.KS", 
-    "삼성전자": "005930.KS",
-    "LIG디펜스": "079550.KS",
-    "삼성SDI": "006400.KS",
-    "두산에너빌리티": "034020.KS",
-    "엘앤에프": "066970.KQ",
-    "삼성생명": "032830.KS",
-    "SK스퀘어": "402340.KS",
-    "삼성전기": "009150.KS",
-    "HD건설기계": "267270.KS",
-    "HD일렉트릭": "267260.KS",
-    "한화": "000880.KS",
-    "삼성중공업": "010140.KS",
-    "삼성E&A": "028050.KS",
-    "하나금융지주": "086790.KS"
+    "SK하이닉스": "000660.KS", "삼성전자": "005930.KS", "LIG디펜스": "079550.KS",
+    "삼성SDI": "006400.KS", "두산에너빌리티": "034020.KS", "엘앤에프": "066970.KQ",
+    "삼성생명": "032830.KS", "SK스퀘어": "402340.KS", "삼성전기": "009150.KS",
+    "HD건설기계": "267270.KS", "HD일렉트릭": "267260.KS", "한화": "000880.KS",
+    "삼성중공업": "010140.KS", "삼성E&A": "028050.KS", "하나금융지주": "086790.KS"
 }
 STD_LIST = [2.0, 1.6, 1.0]
-
-@st.cache_data
-def get_market_info(ticker):
-    """종목의 개별 시가총액 가져오기"""
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    return info.get('marketCap', 0)
 
 def get_clean_data(ticker, period, interval):
     data = yf.download(ticker, period=period, interval=interval, auto_adjust=True)
@@ -52,17 +34,15 @@ def calculate_bands(data, type_name):
 
 @st.cache_data(ttl=3600)
 def get_dynamic_kospi_cap():
-    """지수 상승분을 반영한 동적 코스피 추정 시총 계산"""
+    """지수 기반 동적 시총 기준점 계산"""
     kospi = yf.download("^KS11", period="1d", interval="1m")
     if not kospi.empty:
         curr_index = kospi['Close'].iloc[-1]
-        # 사용자 지정 기준점 반영: 6936.99pt 일 때 전체 시총 5686조 원
-        base_index = 6936.99
-        base_cap = 5686_000_000_000_000
+        base_index, base_cap = 6936.99, 5686_000_000_000_000
         return base_cap * (curr_index / base_index)
-    return 5686_000_000_000_000 # 실패 시 기본값
+    return 5686_000_000_000_000
 
-# 실시간 지수 반영 시총 계산
+# 글로벌 시총 기준점
 current_total_cap = get_dynamic_kospi_cap()
 
 tabs = st.tabs(list(STOCKS.keys()))
@@ -71,79 +51,81 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
     with tabs[i]:
         d_raw = get_clean_data(ticker, "100d", "1d")
         w_raw = get_clean_data(ticker, "2y", "1wk")
-        m_cap = get_market_info(ticker)
-        m_ratio = (m_cap / current_total_cap) * 100 if m_cap else 0
         
         if d_raw is not None and w_raw is not None:
+            # [시총 계산 방식 변경: 에러 방지용]
+            curr_price = float(d_raw['Close'].iloc[-1])
+            # yfinance 호출 최소화를 위해 고정 발행주식수(추정치) 활용 가능하나, 
+            # 여기서는 stock.fast_info를 써서 부하를 줄임
+            try:
+                shares = yf.Ticker(ticker).fast_info['shares_outstanding']
+                m_cap = curr_price * shares
+            except:
+                m_cap = 0
+            
+            m_ratio = (m_cap / current_total_cap) * 100 if m_cap else 0
+            
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
             
             recent_idx = d_raw.index[-20:]
-            today_x = 19
-            last_date = recent_idx[-1]
+            today_x, last_date = 19, recent_idx[-1]
 
-            prev_w_date = w_raw.index[-2]
-            this_w_date = w_raw.index[-1]
+            # 영업일 간격 동적 계산
+            prev_w_date, this_w_date = w_raw.index[-2], w_raw.index[-1]
             actual_gap_days = len(d_raw[(d_raw.index >= prev_w_date) & (d_raw.index < this_w_date)])
             if actual_gap_days == 0: actual_gap_days = 5
             passed_days = len(d_raw[(d_raw.index >= this_w_date) & (d_raw.index <= last_date)]) - 1
-            remain_days = actual_gap_days - passed_days
-            if remain_days < 1: remain_days = 1
+            remain_days = max(1, actual_gap_days - passed_days)
 
-            d_pred_x = today_x + 1 
-            w_pred_x = today_x + remain_days 
+            d_pred_x, w_pred_x = today_x + 1, today_x + remain_days
 
             x_range = list(range(35))
             date_labels = ["" for _ in range(35)]
-            for idx, d in enumerate(recent_idx):
-                date_labels[idx] = d.strftime('%m/%d')
-            for idx in range(20, 35):
-                date_labels[idx] = f"+{idx - today_x}"
+            for idx, d in enumerate(recent_idx): date_labels[idx] = d.strftime('%m/%d')
+            for idx in range(20, 35): date_labels[idx] = f"+{idx - today_x}"
 
             fig = go.Figure()
-            c_up = ['#FFCCCC', '#FF6666', '#FF0000']
-            c_lo = ['#CCCCFF', '#6666FF', '#0000FF']
-            upper_values = []
-            w_center_values = []
+            c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
+            upper_vals, w_center_vals = [], []
 
+            # 1. 일봉 그리기
             d_keys = list(d_bands.keys())
             for key in d_keys:
                 color = 'purple' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
                 y_vals = d_bands[key].iloc[-20:].tolist()
                 fig.add_trace(go.Scatter(x=x_range[:20], y=y_vals, name=key, line=dict(color=color, width=1)))
-                if '상' in key or '중심' in key: upper_values.extend(y_vals)
+                if '상' in key or '중심' in key: upper_vals.extend(y_vals)
+                
                 slope = d_bands[key].iloc[-1] - d_bands[key].iloc[-2]
                 pred_y = y_vals[-1] + slope
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                if '상' in key or '중심' in key: upper_values.append(pred_y)
+                if '상' in key or '중심' in key: upper_vals.append(pred_y)
 
+            # 2. 주봉 그리기
             w_keys = list(w_bands.keys())
             for key in w_keys:
                 color = '#BA55D3' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
                 w_sub = w_bands[key][w_bands[key].index >= recent_idx[0]]
-                w_x = []
-                for dt in w_sub.index:
-                    if dt in d_raw.index:
-                        pos = d_raw.index.get_loc(dt)
-                        relative_pos = pos - (len(d_raw) - 20)
-                        if 0 <= relative_pos < 20:
-                            w_x.append(relative_pos)
-                            if '상' in key or '중심' in key: upper_values.append(w_sub[dt])
-                            if '중심' in key: w_center_values.append(w_sub[dt])
-                fig.add_trace(go.Scatter(x=w_x, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
+                w_x = [d_raw.index.get_loc(dt) - (len(d_raw) - 20) for dt in w_sub.index if dt in d_raw.index]
+                w_x = [x for x in w_x if 0 <= x < 20]
+                
+                fig.add_trace(go.Scatter(x=w_x, y=w_sub.values[:len(w_x)], name=key, line=dict(color=color, width=1, dash='dashdot')))
+                if '상' in key or '중심' in key: upper_vals.extend(w_sub.values)
+                if '중심' in key: w_center_vals.extend(w_sub.values)
+                
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
                 w_pred_y = w_sub.values[-1] + w_slope
                 fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                if '상' in key or '중심' in key: upper_values.append(w_pred_y)
-                if '중심' in key: w_center_values.append(w_pred_y)
+                if '상' in key or '중심' in key: upper_vals.append(w_pred_y)
+                if '중심' in key: w_center_vals.append(w_pred_y)
 
+            # 현재가 및 스케일 조정
             curr_close_v = d_raw['Close'].iloc[-20:].tolist()
             fig.add_trace(go.Scatter(x=x_range[:20], y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
-            upper_values.extend(curr_close_v)
-
-            scale_min_candidates = curr_close_v + w_center_values
-            y_min = min(scale_min_candidates) * 0.995
-            y_max = max(upper_values) * 1.005 
+            
+            y_min = min(curr_close_v + w_center_vals) * 0.995
+            y_max = max(upper_vals + curr_close_v) * 1.005
 
             fig.update_layout(
                 height=500, margin=dict(l=5, r=5, t=30, b=5),
@@ -154,21 +136,19 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            curr_p = float(d_raw['Close'].iloc[-1])
+            # 하단 데이터 리스트
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("📊 금일 확정")
-                st.markdown(f"### 🚩 현재가: {curr_p:,.0f} <span style='font-size:15px; color:gray;'>(비중: {m_ratio:.2f}%)</span>", unsafe_allow_html=True)
-                p_map = {}
-                for k in d_keys: p_map[k] = float(d_bands[k].iloc[-1])
-                for k in w_keys: p_map[k] = float(w_bands[k].iloc[-1])
+                st.markdown(f"### 🚩 현재가: {curr_price:,.0f} <span style='font-size:15px; color:gray;'>(비중: {m_ratio:.2f}%)</span>", unsafe_allow_html=True)
+                p_map = {k: float(d_bands[k].iloc[-1]) for k in d_keys}
+                p_map.update({k: float(w_bands[k].iloc[-1]) for k in w_keys})
                 for k, v in sorted(p_map.items(), key=lambda x: x[1], reverse=True):
-                    st.write(f"{k}: **{v:,.0f}** ({((v/curr_p)-1)*100:+.2f}%)")
+                    st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
             with c2:
                 st.subheader(f"🔮 예측 (일봉+1, 주봉+{remain_days})")
-                st.markdown(f"### 🚩 현재가: {curr_p:,.0f}")
-                f_map = {}
-                for k in d_keys: f_map[f"{k}예측"] = float(d_bands[k].iloc[-1] + (d_bands[k].iloc[-1] - d_bands[k].iloc[-2]))
-                for k in w_keys: f_map[f"{k}예측"] = float(w_bands[k].iloc[-1] + (w_bands[k].iloc[-1] - w_bands[k].iloc[-2]))
+                st.markdown(f"### 🚩 현재가: {curr_price:,.0f}")
+                f_map = {f"{k}예측": float(d_bands[k].iloc[-1] + (d_bands[k].iloc[-1] - d_bands[k].iloc[-2])) for k in d_keys}
+                f_map.update({f"{k}예측": float(w_bands[k].iloc[-1] + (w_bands[k].iloc[-1] - w_bands[k].iloc[-2])) for k in w_keys})
                 for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
-                    st.write(f"{k}: **{v:,.0f}** ({((v/curr_p)-1)*100:+.2f}%)")
+                    st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")

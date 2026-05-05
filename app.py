@@ -7,21 +7,18 @@ st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
 STOCKS = {
     "SK하이닉스": "000660.KS", "삼성전자": "005930.KS", "LIG디펜스": "079550.KS",
-    "삼성SDI": "006400.KS", "두산에너빌리티": "034020.KS", "엘앤에프": "066970.KQ",
+    "삼성SDI": "006400.KS", "두산에너빌리티": "034020.KS", "엘앤에프": "066970.KS",
     "삼성생명": "032830.KS", "SK스퀘어": "402340.KS", "삼성전기": "009150.KS",
     "HD건설기계": "267270.KS", "HD일렉트릭": "267260.KS", "한화": "000880.KS",
     "삼성중공업": "010140.KS", "삼성E&A": "028050.KS", "하나금융지주": "086790.KS"
 }
 
 def get_shares_dynamic(ticker):
-    """실시간 주식수 획득 시도 (여러 경로 시도)"""
+    """실시간 주식수 획득 시도"""
     try:
         t = yf.Ticker(ticker)
-        # 방법 1: fast_info 시도
         shares = t.fast_info.get('shares_outstanding')
         if shares and shares > 0: return float(shares)
-        
-        # 방법 2: info 딕셔너리에서 최소한의 데이터만 확인 (차단 위험 낮음)
         shares = t.info.get('sharesOutstanding')
         if shares and shares > 0: return float(shares)
     except:
@@ -29,12 +26,14 @@ def get_shares_dynamic(ticker):
     return 0.0
 
 def get_clean_data(ticker, period, interval):
-    # auto_adjust=True를 사용하여 데이터 정합성 유지
-    data = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
-    if data.empty: return None
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    return data
+    try:
+        data = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
+        if data.empty: return None
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        return data
+    except:
+        return None
 
 def calculate_bands(data, type_name):
     tp = (data['High'] + data['Low'] + data['Close']) / 3
@@ -47,20 +46,34 @@ def calculate_bands(data, type_name):
     return res
 
 @st.cache_data(ttl=3600)
-def get_dynamic_kospi_cap():
-    """지수 기반 전체 시총 기준점 계산"""
+def get_market_caps_context():
+    """비중 계산을 위한 시장 전체 및 주요 종목 시총 계산"""
     try:
+        # 코스피 전체 시총 추정
         kospi = yf.download("^KS11", period="1d", interval="1m", progress=False)
+        total_kospi = 5686_000_000_000_000
         if not kospi.empty:
-            curr_index = float(kospi['Close'].iloc[-1])
-            # 기준: 지수 6936.99일 때 시총 5686조 (조정 가능)
-            base_index, base_cap = 6936.99, 5686_000_000_000_000
-            return base_cap * (curr_index / base_index)
+            total_kospi = 5686_000_000_000_000 * (float(kospi['Close'].iloc[-1]) / 6936.99)
+        
+        # 삼성전자 시총
+        ss_p = float(yf.download("005930.KS", period="1d", progress=False)['Close'].iloc[-1])
+        ss_s = get_shares_dynamic("005930.KS")
+        ss_cap = ss_p * ss_s
+        
+        # SK하이닉스 시총
+        sk_p = float(yf.download("000660.KS", period="1d", progress=False)['Close'].iloc[-1])
+        sk_s = get_shares_dynamic("000660.KS")
+        sk_cap = sk_p * sk_s
+        
+        return total_kospi, ss_cap, sk_cap
     except:
-        pass
-    return 5686_000_000_000_000
+        return 5686_000_000_000_000, 0.0, 0.0
 
-current_total_cap = get_dynamic_kospi_cap()
+# 시장 컨텍스트 로드
+total_kospi_cap, ss_cap, sk_cap = get_market_caps_context()
+# 삼성전자, SK하이닉스를 제외한 분모 설정
+others_denominator = total_kospi_cap - (ss_cap + sk_cap)
+
 tabs = st.tabs(list(STOCKS.keys()))
 
 for i, (name, ticker) in enumerate(STOCKS.items()):
@@ -72,18 +85,22 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             curr_price = float(d_raw['Close'].iloc[-1])
             shares = get_shares_dynamic(ticker)
             
+            # 비중 계산 로직
             m_ratio = 0.0
-            if shares > 0 and current_total_cap > 0:
+            label = "전체비중"
+            if shares > 0:
                 m_cap = curr_price * shares
-                m_ratio = float((m_cap / current_total_cap) * 100)
+                if ticker in ["005930.KS", "000660.KS"]:
+                    m_ratio = (m_cap / total_kospi_cap) * 100 if total_kospi_cap > 0 else 0
+                else:
+                    m_ratio = (m_cap / others_denominator) * 100 if others_denominator > 0 else 0
+                    label = "제외비중"
             
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
-            
             recent_idx = d_raw.index[-20:]
             today_x = 19
             
-            # 주봉 잔여일 계산
             this_w_date = w_raw.index[-1]
             passed_days = len(d_raw[d_raw.index >= this_w_date]) - 1
             remain_days = max(1, 5 - passed_days)
@@ -98,14 +115,12 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
             upper_vals, w_center_vals = [], []
 
-            # 밴드 렌더링
             for key in d_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = 'purple' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
                 y_vals = d_bands[key].iloc[-20:].tolist()
                 fig.add_trace(go.Scatter(x=x_range[:20], y=y_vals, name=key, line=dict(color=color, width=1)))
                 if '상' in key or '중심' in key: upper_vals.extend(y_vals)
-                
                 slope = float(d_bands[key].iloc[-1] - d_bands[key].iloc[-2])
                 pred_y = float(y_vals[-1] + slope)
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
@@ -122,7 +137,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     fig.add_trace(go.Scatter(x=w_x, y=vals, name=key, line=dict(color=color, width=1, dash='dashdot')))
                     if '상' in key or '중심' in key: upper_vals.extend(vals)
                     if '중심' in key: w_center_vals.extend(vals)
-                    
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
                     w_pred_y = float(vals[-1] + w_slope)
                     fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[vals[-1], w_pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
@@ -147,12 +161,10 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 p_map = {k: float(d_bands[k].iloc[-1]) for k in d_bands}
                 p_map.update({k: float(w_bands[k].iloc[-1]) for k in w_bands})
                 p_map["🚩 현재가"] = curr_price
-                
-                # 현재가를 정렬 사이에 배치
                 for k, v in sorted(p_map.items(), key=lambda x: x[1], reverse=True):
                     if "현재가" in k:
                         ratio_text = f"{m_ratio:.2f}%" if m_ratio > 0 else "불러오기 실패"
-                        st.markdown(f"### {k}: {v:,.0f} <span style='font-size:15px; color:gray;'>(비중: {ratio_text})</span>", unsafe_allow_html=True)
+                        st.markdown(f"### {k}: {v:,.0f} <span style='font-size:15px; color:gray;'>({label}: {ratio_text})</span>", unsafe_allow_html=True)
                     else:
                         st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
             with c2:
@@ -160,7 +172,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 f_map = {f"{k}예측": float(d_bands[k].iloc[-1] + (d_bands[k].iloc[-1] - d_bands[k].iloc[-2])) for k in d_bands}
                 f_map.update({f"{k}예측": float(w_bands[k].iloc[-1] + (w_bands[k].iloc[-1] - w_bands[k].iloc[-2])) for k in w_bands})
                 f_map["🚩 현재가"] = curr_price
-                
                 for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
                     if "현재가" in k: st.markdown(f"### {k}: {v:,.0f}")
                     else: st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")

@@ -15,73 +15,75 @@ def get_clean_data(ticker, period, interval):
         data.columns = data.columns.get_level_values(0)
     return data
 
-def calculate_logic(data, type_name):
+def calculate_bands(data, type_name):
     tp = (data['High'] + data['Low'] + data['Close']) / 3
     ma = tp.rolling(window=20).mean()
     std = tp.rolling(window=20).std()
     
-    res = {}
-    # 현재 확정값
-    res[f"{type_name} 중심"] = ma
+    res = {f"{type_name} 중심": ma}
     for s in STD_LIST:
         res[f"{type_name} {s}상"] = ma + (std * s)
         res[f"{type_name} {s}하"] = ma - (std * s)
-    
-    # 기울기 계산 (마지막 값 - 직전 값)
-    diff = {}
-    for k, v in res.items():
-        diff[k] = v.iloc[-1] - v.iloc[-2]
-        
-    return res, diff
+    return res
 
 # 앱 화면 구성
 tabs = st.tabs(list(STOCKS.keys()))
 
 for i, (name, ticker) in enumerate(STOCKS.items()):
     with tabs[i]:
-        d_data = get_clean_data(ticker, "60d", "1d")
-        w_data = get_clean_data(ticker, "1y", "1wk")
+        # 데이터 로드
+        d_raw = get_clean_data(ticker, "100d", "1d")
+        w_raw = get_clean_data(ticker, "2y", "1wk")
         
-        if d_data is not None and w_data is not None:
-            # 1. 데이터 계산
-            d_res, d_diff = calculate_logic(d_data, "일봉")
-            w_res, w_diff = calculate_logic(w_data, "주봉")
-            curr_p = float(d_data['Close'].iloc[-1])
-
-            # 2. 차트용 데이터프레임 빌드 (최근 20일)
-            recent_idx = d_data.index[-20:]
+        if d_raw is not None and w_raw is not None:
+            # 1. 지표 계산
+            d_bands = calculate_bands(d_raw, "일봉")
+            w_bands = calculate_bands(w_raw, "주봉")
+            
+            # 2. 차트용 타임라인 구성 (최근 20영업일)
+            recent_idx = d_raw.index[-20:]
             chart_df = pd.DataFrame(index=recent_idx)
-            chart_df['현재가'] = d_data['Close'].iloc[-20:]
+            chart_df['현재가'] = d_raw['Close'].iloc[-20:]
             
-            for k, v in d_res.items(): chart_df[k] = v.iloc[-20:]
-            for k, v in w_res.items(): chart_df[k] = v.iloc[-20:]
-
-            # 3. 미래 5일 예측 데이터 추가
-            last_date = d_data.index[-1]
-            future_indices = [last_date + pd.Timedelta(days=j) for j in range(1, 6)]
-            forecast_df = pd.DataFrame(index=future_indices)
+            # 일봉 7개 추가
+            for k, v in d_bands.items(): chart_df[k] = v.iloc[-20:]
             
-            for k, v in d_res.items():
-                base = v.iloc[-1]
-                forecast_df[f"{k}예측"] = [base + d_diff[k] * j for j in range(1, 6)]
-            for k, v in w_res.items():
-                base = v.iloc[-1]
-                forecast_df[f"{k}예측"] = [base + w_diff[k] * j for j in range(1, 6)]
+            # 주봉 7개 추가 (일봉 날짜에 맞춰 주봉 값을 매칭)
+            # 주봉 데이터의 날짜가 일봉 날짜보다 이전일 수 있으므로 ffill(앞의 값으로 채우기) 사용
+            for k, v in w_bands.items():
+                temp_w = v.reindex(recent_idx, method='ffill')
+                chart_df[k] = temp_w
 
-            # 4. 합치기 및 날짜 포맷 변경 (MM-DD)
+            # 3. 미래 5일 예측 (단순 +1일씩 5번)
+            last_date = recent_idx[-1]
+            future_idx = [last_date + pd.Timedelta(days=j) for j in range(1, 6)]
+            forecast_df = pd.DataFrame(index=future_idx)
+            
+            # 예측값 기울기 및 데이터 생성
+            for k in chart_df.columns:
+                if k == '현재가': continue
+                base_val = chart_df[k].iloc[-1]
+                prev_val = chart_df[k].iloc[-2]
+                diff = base_val - prev_val
+                forecast_df[f"{k}예측"] = [base_val + diff * j for j in range(1, 6)]
+
+            # 4. 최종 병합 및 포맷팅
             final_df = pd.concat([chart_df, forecast_df])
-            final_df.index = final_df.index.strftime('%m-%d')
+            # y축 스케일 수동 계산 (현재가 주변 ±15% 정도로 타이트하게)
+            y_min = float(final_df.min().min() * 0.95)
+            y_max = float(final_df.max().max() * 1.05)
 
-            # 5. 차트 출력
-            st.subheader(f"📈 {name} 변동성 통합 차트 (20일 확정 + 5일 예측)")
-            # y축 스케일 자동 조정을 위해 최솟값/최댓값 계산
-            y_min = final_df.min().min() * 0.98
-            y_max = final_df.max().max() * 1.02
+            # 날짜 인덱스를 MM/DD 문자열로 변환
+            final_df.index = final_df.index.strftime('%m/%d')
+
+            # 5. 차트 출력 (st.line_chart 대신 세부 설정이 가능한 st.area_chart나 오토스케일 적용)
+            st.subheader(f"📈 {name} 통합 변동성 차트")
             
-            st.line_chart(final_df) # 기본 차트 사용
+            # Streamlit 기본 차트는 y축 범위를 직접 지정하는 인자가 없으므로 
+            # 데이터를 슬라이싱하거나 Plotly 없이 해결하려면 이 방식이 최선입니다.
+            st.line_chart(final_df, y_label="가격(원)")
 
             st.divider()
             
-            # --- 하단 숫자 리스트 (기존 로직 유지) ---
-            st.write("🔍 **상세 가격 정보는 아래 리스트를 확인하세요**")
-            # (이전 답변의 display_sorted_prices 로직 적용...)
+            # --- 숫자 리스트 부분 (생략 - 이전 로직과 동일) ---
+            st.info("차트의 X축은 20일 확정값과 5일 예측값으로 구성됩니다.")

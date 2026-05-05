@@ -6,7 +6,7 @@ from datetime import timedelta
 
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
-STOCKS = {"SK하이닉스": "000660.KS", "삼성전자": "005930.KS"}
+STOCKS = {"SK하이닉스": "000660.KS", "삼성전자": "005930.KS", "LIG디펜스": "079550.KS", "삼성SDI": "006400.KS", "두산에너빌리티": "034020.KS", "엘앤에프": "066970.KS"}
 STD_LIST = [2.0, 1.6, 1.0]
 
 def get_clean_data(ticker, period, interval):

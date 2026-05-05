@@ -93,4 +93,30 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             y_min = float(d_raw['Close'].iloc[-20:].min() * 0.96)
             y_max = float(d_raw['Close'].iloc[-20:].max() * 1.04)
             fig.update_layout(
-                height=
+                height=500, margin=dict(l=5, r=5, t=30, b=5),
+                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_pred_x) + 0.5]),
+                yaxis=dict(range=[y_min, y_max], autorange=False, tickformat=","),
+                showlegend=False, hovermode='x unified'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.divider()
+
+            # 3. 하단 리스트
+            curr_p = float(d_raw['Close'].iloc[-1])
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("📊 금일 확정")
+                p_map = {"현재가": curr_p}
+                for k in list(d_bands.keys()): p_map[k] = float(d_bands[k].iloc[-1])
+                for k in list(w_bands.keys()): p_map[k] = float(w_bands[k].iloc[-1])
+                for k, v in sorted(p_map.items(), key=lambda x: x[1], reverse=True):
+                    if k == "현재가": st.markdown(f"### 🚩 {k}: {v:,.0f}")
+                    else: st.write(f"{k}: **{v:,.0f}** ({((v/curr_p)-1)*100:+.2f}%)")
+            with c2:
+                st.subheader("🔮 예측 (일봉+1, 주봉+{0})".format(remain_days))
+                f_map = {"현재가": curr_p}
+                for k in list(d_bands.keys()): f_map[f"{k}예측"] = float(d_bands[k].iloc[-1] + (d_bands[k].iloc[-1] - d_bands[k].iloc[-2]))
+                for k in list(w_bands.keys()): f_map[f"{k}예측"] = float(w_bands[k].iloc[-1] + (w_bands[k].iloc[-1] - w_bands[k].iloc[-2]))
+                for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
+                    if k == "현재가": st.markdown(f"### 🚩 {k}: {v:,.0f}")
+                    else: st.write(f"{k}: **{v:,.0f}** ({((v/curr_p)-1)*100:+.2f}%)")

@@ -1,75 +1,93 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 
-st.set_page_config(page_title="SK하이닉스 전략 시뮬레이터", layout="wide")
-st.title("💾 SK하이닉스 변동성 밴드 (NXT 대응)")
+st.set_page_config(page_title="주식 변동성 전략 도우미", layout="wide")
 
-# 1. 설정값 (SK하이닉스 고정)
-TICKER = "000660.KS"
+# 1. 설정 및 계산 함수
+STOCKS = {"SK하이닉스": "000660.KS", "삼성전자": "005930.KS"}
 STD_LIST = [2.0, 1.6, 1.0]
 
-def get_band(df, std_val):
-    # (고+저+종)/3 계산
-    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-    ma20 = typical_price.rolling(window=20).mean()
-    std_dev = typical_price.rolling(window=20).std()
+def get_indicators(ticker, period, interval):
+    data = yf.download(ticker, period=period, interval=interval, auto_adjust=True)
+    if data.empty: return None
     
-    upper = ma20 + (std_dev * std_val)
-    lower = ma20 - (std_dev * std_val)
-    return upper, ma20, lower
+    # Typical Price (HLC/3) 계산
+    tp = (data['High'] + data['Low'] + data['Close']) / 3
+    ma20 = tp.rolling(window=20).mean()
+    std = tp.rolling(window=20).std()
+    curr_p = float(data['Close'].iloc[-1])
+    
+    results = {"현재가": curr_p}
+    for s in STD_LIST:
+        results[f"일봉 {s} 상단"] = float(ma20.iloc[-1] + (std.iloc[-1] * s))
+        results[f"일봉 {s} 하단"] = float(ma20.iloc[-1] - (std.iloc[-1] * s))
+        # 예측값 계산 (기울기 반영)
+        results[f"내일 {s} 상단예측"] = float((ma20.iloc[-1] + (std.iloc[-1] * s)) + ((ma20.iloc[-1] + (std.iloc[-1] * s)) - (ma20.iloc[-2] + (std.iloc[-2] * s))))
+        results[f"내일 {s} 하단예측"] = float((ma20.iloc[-1] - (std.iloc[-1] * s)) + ((ma20.iloc[-1] - (std.iloc[-1] * s)) - (ma20.iloc[-2] - (std.iloc[-2] * s))))
+    
+    return results
 
-def process_data(interval_name, period, interval):
-    data = yf.download(TICKER, period=period, interval=interval)
-    if data.empty:
-        return None
+def get_weekly_indicators(ticker):
+    data = yf.download(ticker, period="1y", interval="1wk", auto_adjust=True)
+    if data.empty: return None
     
-    # 멀티인덱스 방지 및 단일화
-    data.columns = [col[0] if isinstance(col, tuple) else col for col in data.columns]
+    tp = (data['High'] + data['Low'] + data['Close']) / 3
+    ma20 = tp.rolling(window=20).mean()
+    std = tp.rolling(window=20).std()
     
     results = {}
     for s in STD_LIST:
-        upper, ma, lower = get_band(data, s)
-        # 마지막(현재)과 직전(과거) 데이터 추출
-        results[s] = {
-            "prev_upper": upper.iloc[-2],
-            "curr_upper": upper.iloc[-1],
-            "curr_ma": ma.iloc[-1],
-            "curr_lower": lower.iloc[-1],
-            "prev_lower": lower.iloc[-2]
-        }
-    return results, data['Close'].iloc[-1]
+        results[f"주봉 {s} 상단"] = float(ma20.iloc[-1] + (std.iloc[-1] * s))
+        results[f"주봉 {s} 하단"] = float(ma20.iloc[-1] - (std.iloc[-1] * s))
+        # 예측값 계산 (기울기 반영)
+        results[f"다음주 {s} 상단예측"] = float((ma20.iloc[-1] + (std.iloc[-1] * s)) + ((ma20.iloc[-1] + (std.iloc[-1] * s)) - (ma20.iloc[-2] + (std.iloc[-2] * s))))
+        results[f"다음주 {s} 하단예측"] = float((ma20.iloc[-1] - (std.iloc[-1] * s)) + ((ma20.iloc[-1] - (std.iloc[-1] * s)) - (ma20.iloc[-2] - (std.iloc[-2] * s))))
+    
+    return results
 
-# 앱 화면 구성
-tab1, tab2 = st.tabs(["일봉(Daily) 예측", "주봉(Weekly) 예측"])
+def display_sorted_prices(price_dict, current_price, title):
+    # 가격 기준 내림차순 정렬
+    sorted_items = sorted(price_dict.items(), key=lambda x: x[1], reverse=True)
+    
+    st.subheader(title)
+    for name, price in sorted_items:
+        diff_pct = ((price / current_price) - 1) * 100
+        color = "red" if price > current_price else "blue"
+        if name == "현재가":
+            st.markdown(f"### 🚩 **{name}: {price:,.0f}원**")
+        else:
+            st.write(f"{name}: **{price:,.0f}원** ({diff_pct:+.2f}%)")
 
-with tab1:
-    res_d, curr_p = process_data("일봉", "60d", "1d")
-    if res_d:
-        st.write(f"### 🗓️ 오늘 종가(지연): {float(curr_p):,.0f}원")
-        for s in STD_LIST:
-            st.info(f"**표준편차 {s} 밴드**")
-            c1, c2, c3 = st.columns(3)
-            # 예측 로직: 이전일과 오늘의 기울기를 이어 내일의 예상 범위를 보여줌
-            next_up = res_d[s]['curr_upper'] + (res_d[s]['curr_upper'] - res_d[s]['prev_upper'])
-            next_low = res_d[s]['curr_lower'] + (res_d[s]['curr_lower'] - res_d[s]['prev_lower'])
+# 2. 앱 화면 구성
+tabs = st.tabs(list(STOCKS.keys()))
+
+for i, (name, ticker) in enumerate(STOCKS.items()):
+    with tabs[i]:
+        daily_res = get_indicators(ticker, "60d", "1d")
+        weekly_res = get_weekly_indicators(ticker)
+        
+        if daily_res and weekly_res:
+            curr_p = daily_res["현재가"]
             
-            c1.metric("내일 상단 예측", f"{next_up:,.0f}원")
-            c2.metric("중심선", f"{res_d[s]['curr_ma']:,.0f}원")
-            c3.metric("내일 하단 예측", f"{next_low:,.0f}원")
-
-with tab2:
-    res_w, curr_p = process_data("주봉", "1y", "1wk")
-    if res_w:
-        st.write(f"### 🗓️ 현재가(지연): {float(curr_p):,.0f}원")
-        for s in STD_LIST:
-            st.success(f"**표준편차 {s} 밴드**")
-            w1, w2, w3 = st.columns(3)
-            # 예측 로직: 지난주와 이번주의 기울기를 이어 다음주 예상 범위 산출
-            next_w_up = res_w[s]['curr_upper'] + (res_w[s]['curr_upper'] - res_w[s]['prev_upper'])
-            next_w_low = res_w[s]['curr_lower'] + (res_w[s]['curr_lower'] - res_w[s]['prev_lower'])
+            # --- 상단: 금일 및 금주 실시간 데이터 ---
+            now_data = {"현재가": curr_p}
+            for k, v in daily_res.items():
+                if "상단" in k or "하단" in k: 
+                    if "내일" not in k: now_data[k] = v
+            for k, v in weekly_res.items():
+                if "상단" in k or "하단" in k:
+                    if "다음주" not in k: now_data[k] = v
             
-            w1.metric("차주 상단 예측", f"{next_w_up:,.0f}원")
-            w2.metric("중심선", f"{res_w[s]['curr_ma']:,.0f}원")
-            w3.metric("차주 하단 예측", f"{next_w_low:,.0f}원")
+            display_sorted_prices(now_data, curr_p, "📊 금일/금주 지표 (가격순 정렬)")
+            
+            st.divider()
+            
+            # --- 하단: 내일 및 다음주 예측 데이터 ---
+            predict_data = {"현재가": curr_p}
+            for k, v in daily_res.items():
+                if "예측" in k: predict_data[k] = v
+            for k, v in weekly_res.items():
+                if "예측" in k: predict_data[k] = v
+            
+            display_sorted_prices(predict_data, curr_p, "🔮 내일/차주 예측 (가격순 정렬)")

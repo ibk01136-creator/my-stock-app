@@ -3,7 +3,7 @@ import yfinance as yf
 
 st.title("📈 주식 감시 도우미")
 
-# 원하는 종목 추가 (이름: 티커)
+# 종목 리스트
 stocks = {
     "삼성전자": "005930.KS",
     "현대차": "005380.KS",
@@ -12,15 +12,22 @@ stocks = {
 
 if st.button('오늘의 감시가 계산'):
     for name, ticker in stocks.items():
-        # 데이터 가져오기
-        data = yf.download(ticker, period="60d")
+        # auto_adjust=True를 넣어 가격 데이터를 단일 형태로 고정
+        data = yf.download(ticker, period="60d", auto_adjust=True)
         
-        # 20일 이동평균선 계산
-        ma20 = data['Close'].rolling(window=20).mean().iloc[-1]
-        current_price = data['Close'].iloc[-1]
-        
-        # 결과 표시
-        st.subheader(f"📍 {name}")
-        st.write(f"현재가: {current_price:,.0f}원")
-        st.write(f"**감시가(20일선): {ma20:,.0f}원**")
-        st.divider()
+        if not data.empty:
+            # 20일 이동평균선 계산
+            # 최근 yfinance 업데이트 대응을 위해 .iloc[:, 0] 등으로 열을 확실히 지정
+            close_prices = data['Close']
+            ma20_series = close_prices.rolling(window=20).mean()
+            
+            curr_price = float(close_prices.iloc[-1])
+            ma20_price = float(ma20_series.iloc[-1])
+            
+            st.subheader(f"📍 {name}")
+            col1, col2 = st.columns(2)
+            col1.metric("현재가", f"{curr_price:,.0f}원")
+            col2.metric("감시가(20일선)", f"{ma20_price:,.0f}원", f"{curr_price - ma20_price:,.0f}원")
+            st.divider()
+        else:
+            st.error(f"{name} 데이터를 불러오지 못했습니다.")

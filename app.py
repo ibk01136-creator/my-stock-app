@@ -1,7 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime
 
 st.set_page_config(page_title="SK/삼성 변동성 전략", layout="wide")
 
@@ -21,15 +22,9 @@ def calculate_bands(data, type_name):
     std = tp.rolling(window=20).std()
     res = {f"{type_name} 중심": ma}
     for s in STD_LIST:
-        res[f"{type_name} {s}상"]: ma + (std * s)
-        res[f"{type_name} {s}하"]: ma - (std * s)
-    
-    # 딕셔너리 재구성 (에러 방지용)
-    final_res = {f"{type_name} 중심": ma}
-    for s in STD_LIST:
-        final_res[f"{type_name} {s}상"] = ma + (std * s)
-        final_res[f"{type_name} {s}하"] = ma - (std * s)
-    return final_res
+        res[f"{type_name} {s}상"] = ma + (std * s)
+        res[f"{type_name} {s}하"] = ma - (std * s)
+    return res
 
 tabs = st.tabs(list(STOCKS.keys()))
 
@@ -42,51 +37,61 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
             
-            # 1. 차트 데이터 빌드
+            # 1. 날짜 설정 (최근 20영업일)
             recent_idx = d_raw.index[-20:]
-            chart_df = pd.DataFrame(index=recent_idx)
-            chart_df['현재가'] = d_raw['Close'].iloc[-20:]
+            last_date = recent_idx[-1]
+            next_date = last_date + pd.Timedelta(days=1)
             
-            for k, v in d_bands.items(): chart_df[k] = v.iloc[-20:]
+            # 2. Plotly 차트 생성
+            fig = go.Figure()
             
-            # 주봉: 첫 영업일만 값 할당 (나머지는 NaN 유지하여 선 연결)
-            for k, v in w_bands.items():
-                s = pd.Series(index=recent_idx, dtype='float64')
-                intersect = v.index.intersection(recent_idx)
-                s.loc[intersect] = v.loc[intersect]
-                chart_df[k] = s
+            # --- 과거 데이터 (5/4까지 실선) ---
+            # 현재가 (검정색)
+            fig.add_trace(go.Scatter(x=recent_idx, y=d_raw['Close'].iloc[-20:], name='현재가', line=dict(color='black', width=2)))
+            
+            # 일봉 밴드 (빨강/파랑/보라 계열)
+            colors_upper = ['#FFCCCC', '#FF6666', '#FF0000']
+            colors_lower = ['#CCCCFF', '#6666FF', '#0000FF']
+            
+            fig.add_trace(go.Scatter(x=recent_idx, y=d_bands['일봉 중심'].iloc[-20:], name='일봉 중심', line=dict(color='purple', width=1)))
+            for j, s in enumerate(STD_LIST):
+                fig.add_trace(go.Scatter(x=recent_idx, y=d_bands[f'일봉 {s}상'].iloc[-20:], name=f'일봉 {s}상', line=dict(color=colors_upper[j], width=1)))
+                fig.add_trace(go.Scatter(x=recent_idx, y=d_bands[f'일봉 {s}하'].iloc[-20:], name=f'일봉 {s}하', line=dict(color=colors_lower[j], width=1)))
 
-            # 2. 미래 1일 예측 추가 (연결점 생성)
-            last_dt = recent_idx[-1]
-            next_dt = last_dt + pd.Timedelta(days=1)
+            # 주봉 밴드 (첫 영업일 매칭 및 선 연결)
+            for j, s in enumerate(STD_LIST):
+                # 주봉 데이터 중 최근 20일 범위에 있는 것만 추출
+                w_sub = w_bands[f'주봉 {s}상'][w_bands[f'주봉 {s}상'].index >= recent_idx[0]]
+                fig.add_trace(go.Scatter(x=w_sub.index, y=w_sub.values, name=f'주봉 {s}상', line=dict(color=colors_upper[j], width=1, dash='dashdot')))
+                
+                w_sub_l = w_bands[f'주봉 {s}하'][w_bands[f'주봉 {s}하'].index >= recent_idx[0]]
+                fig.add_trace(go.Scatter(x=w_sub_l.index, y=w_sub_l.values, name=f'주봉 {s}하', line=dict(color=colors_lower[j], width=1, dash='dashdot')))
+
+            # --- 미래 예측 (내일 하루만 점선) ---
+            future_x = [last_date, next_date] # 5/4에서 5/5로 이어지는 선
+            for k, v in d_bands.items():
+                diff = v.iloc[-1] - v.iloc[-2]
+                pred_val = v.iloc[-1] + diff
+                fig.add_trace(go.Scatter(x=future_x, y=[v.iloc[-1], pred_val], line=dict(dash='dot', width=1), showlegend=False))
+
+            # 3. 레이아웃 설정 (Y축 스케일 및 X축 포맷)
+            y_min = float(d_raw['Close'].iloc[-20:].min() * 0.95)
+            y_max = float(d_raw['Close'].iloc[-20:].max() * 1.05)
+
+            fig.update_layout(
+                height=500,
+                margin=dict(l=10, r=10, t=30, b=10),
+                xaxis=dict(tickformat='%m/%d', range=[recent_idx[0], next_date]),
+                yaxis=dict(range=[y_min, y_max], autorange=False), # Y축 강제 고정
+                showlegend=False,
+                hovermode='x unified'
+            )
             
-            # 예측용 데이터 한 줄 생성
-            forecast_row = {}
-            for col in chart_df.columns:
-                if col == '현재가': continue
-                vals = chart_df[col].dropna()
-                if len(vals) >= 2:
-                    diff = vals.iloc[-1] - vals.iloc[-2]
-                    forecast_row[col] = vals.iloc[-1] + diff
-            
-            # 3. 차트 출력 (st.line_chart의 개선된 버전 사용)
-            st.subheader(f"📈 {name} 통합 차트")
-            
-            # Y축 0원 문제 해결을 위해 전용 옵션 사용
-            plot_df = chart_df.copy()
-            # 예측값 추가 (마지막 행에 붙임)
-            forecast_series = pd.Series(forecast_row, name=next_dt)
-            plot_df = pd.concat([plot_df, forecast_series.to_frame().T])
-            
-            # 인덱스를 문자열로 변환 (MM/DD)
-            plot_df.index = plot_df.index.strftime('%m/%d')
-            
-            # st.line_chart는 최신 버전에서 y축 범위를 자동으로 잡아줍니다.
-            st.line_chart(plot_df)
+            st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
             
-            # 4. 하단 가격 리스트
+            # 4. 하단 가격 리스트 (내림차순 정렬)
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             
@@ -96,9 +101,9 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 for k, v in d_bands.items(): p_map[k] = float(v.iloc[-1])
                 for k, v in w_bands.items(): p_map[k] = float(v.iloc[-1])
                 for k, v in sorted(p_map.items(), key=lambda x: x[1], reverse=True):
-                    p_diff = ((v/curr_p)-1)*100
+                    diff = ((v/curr_p)-1)*100
                     if k == "현재가": st.markdown(f"### 🚩 {k}: {v:,.0f}")
-                    else: st.write(f"{k}: **{v:,.0f}** ({p_diff:+.2f}%)")
+                    else: st.write(f"{k}: **{v:,.0f}** ({diff:+.2f}%)")
 
             with c2:
                 st.subheader("🔮 내일/차주 예측")
@@ -106,6 +111,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 for k, v in d_bands.items(): f_map[f"{k}예측"] = float(v.iloc[-1] + (v.iloc[-1]-v.iloc[-2]))
                 for k, v in w_bands.items(): f_map[f"{k}예측"] = float(v.iloc[-1] + (v.iloc[-1]-v.iloc[-2]))
                 for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
-                    f_diff = ((v/curr_p)-1)*100
+                    diff = ((v/curr_p)-1)*100
                     if k == "현재가": st.markdown(f"### 🚩 {k}: {v:,.0f}")
-                    else: st.write(f"{k}: **{v:,.0f}** ({f_diff:+.2f}%)")
+                    else: st.write(f"{k}: **{v:,.0f}** ({diff:+.2f}%)")

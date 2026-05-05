@@ -14,10 +14,11 @@ STOCKS = {
 }
 
 def get_shares_dynamic(ticker):
-    """실시간 주식수만 획득 (실패 시 0 반환)"""
+    """실시간 주식수 획득 (야후 데이터 부재 시 0 반환)"""
     try:
-        shares = yf.Ticker(ticker).fast_info['shares_outstanding']
-        return shares if shares and shares > 0 else 0
+        t = yf.Ticker(ticker)
+        shares = t.fast_info.get('shares_outstanding', 0)
+        return shares if shares else 0
     except:
         return 0
 
@@ -57,10 +58,9 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
         
         if d_raw is not None and w_raw is not None:
             curr_price = float(d_raw['Close'].iloc[-1])
-            # 실시간 주식수만 활용
             shares = get_shares_dynamic(ticker)
             m_cap = curr_price * shares
-            m_ratio = (m_cap / current_total_cap) * 100
+            m_ratio = (m_cap / current_total_cap) * 100 if current_total_cap else 0
             
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")

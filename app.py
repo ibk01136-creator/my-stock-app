@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import timedelta
 
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
@@ -14,6 +13,14 @@ STOCKS = {
     "삼성중공업": "010140.KS", "삼성E&A": "028050.KS", "하나금융지주": "086790.KS"
 }
 STD_LIST = [2.0, 1.6, 1.0]
+
+@st.cache_data(ttl=86400)
+def get_shares_outstanding(ticker):
+    """발행주식수 캐싱 (서버 부하 감소)"""
+    try:
+        return yf.Ticker(ticker).info.get('sharesOutstanding', 0)
+    except:
+        return 0
 
 def get_clean_data(ticker, period, interval):
     data = yf.download(ticker, period=period, interval=interval, auto_adjust=True)
@@ -42,7 +49,6 @@ def get_dynamic_kospi_cap():
         return base_cap * (curr_index / base_index)
     return 5686_000_000_000_000
 
-# 글로벌 시총 기준점
 current_total_cap = get_dynamic_kospi_cap()
 
 tabs = st.tabs(list(STOCKS.keys()))
@@ -53,16 +59,9 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
         w_raw = get_clean_data(ticker, "2y", "1wk")
         
         if d_raw is not None and w_raw is not None:
-            # [시총 계산 방식 변경: 에러 방지용]
             curr_price = float(d_raw['Close'].iloc[-1])
-            # yfinance 호출 최소화를 위해 고정 발행주식수(추정치) 활용 가능하나, 
-            # 여기서는 stock.fast_info를 써서 부하를 줄임
-            try:
-                shares = yf.Ticker(ticker).fast_info['shares_outstanding']
-                m_cap = curr_price * shares
-            except:
-                m_cap = 0
-            
+            shares = get_shares_outstanding(ticker)
+            m_cap = curr_price * shares
             m_ratio = (m_cap / current_total_cap) * 100 if m_cap else 0
             
             d_bands = calculate_bands(d_raw, "일봉")
@@ -71,7 +70,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             recent_idx = d_raw.index[-20:]
             today_x, last_date = 19, recent_idx[-1]
 
-            # 영업일 간격 동적 계산
             prev_w_date, this_w_date = w_raw.index[-2], w_raw.index[-1]
             actual_gap_days = len(d_raw[(d_raw.index >= prev_w_date) & (d_raw.index < this_w_date)])
             if actual_gap_days == 0: actual_gap_days = 5
@@ -89,38 +87,32 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
             upper_vals, w_center_vals = [], []
 
-            # 1. 일봉 그리기
             d_keys = list(d_bands.keys())
             for key in d_keys:
                 color = 'purple' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
                 y_vals = d_bands[key].iloc[-20:].tolist()
                 fig.add_trace(go.Scatter(x=x_range[:20], y=y_vals, name=key, line=dict(color=color, width=1)))
                 if '상' in key or '중심' in key: upper_vals.extend(y_vals)
-                
                 slope = d_bands[key].iloc[-1] - d_bands[key].iloc[-2]
                 pred_y = y_vals[-1] + slope
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
                 if '상' in key or '중심' in key: upper_vals.append(pred_y)
 
-            # 2. 주봉 그리기
             w_keys = list(w_bands.keys())
             for key in w_keys:
                 color = '#BA55D3' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
                 w_sub = w_bands[key][w_bands[key].index >= recent_idx[0]]
                 w_x = [d_raw.index.get_loc(dt) - (len(d_raw) - 20) for dt in w_sub.index if dt in d_raw.index]
                 w_x = [x for x in w_x if 0 <= x < 20]
-                
                 fig.add_trace(go.Scatter(x=w_x, y=w_sub.values[:len(w_x)], name=key, line=dict(color=color, width=1, dash='dashdot')))
                 if '상' in key or '중심' in key: upper_vals.extend(w_sub.values)
                 if '중심' in key: w_center_vals.extend(w_sub.values)
-                
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
                 w_pred_y = w_sub.values[-1] + w_slope
                 fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
                 if '상' in key or '중심' in key: upper_vals.append(w_pred_y)
                 if '중심' in key: w_center_vals.append(w_pred_y)
 
-            # 현재가 및 스케일 조정
             curr_close_v = d_raw['Close'].iloc[-20:].tolist()
             fig.add_trace(go.Scatter(x=x_range[:20], y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
             
@@ -136,19 +128,26 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 데이터 리스트
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("📊 금일 확정")
-                st.markdown(f"### 🚩 현재가: {curr_price:,.0f} <span style='font-size:15px; color:gray;'>(비중: {m_ratio:.2f}%)</span>", unsafe_allow_html=True)
                 p_map = {k: float(d_bands[k].iloc[-1]) for k in d_keys}
                 p_map.update({k: float(w_bands[k].iloc[-1]) for k in w_keys})
+                p_map["🚩 현재가"] = curr_price
+                
                 for k, v in sorted(p_map.items(), key=lambda x: x[1], reverse=True):
-                    st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
+                    if "현재가" in k:
+                        st.markdown(f"### {k}: {v:,.0f} <span style='font-size:15px; color:gray;'>(비중: {m_ratio:.2f}%)</span>", unsafe_allow_html=True)
+                    else:
+                        st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
             with c2:
                 st.subheader(f"🔮 예측 (일봉+1, 주봉+{remain_days})")
-                st.markdown(f"### 🚩 현재가: {curr_price:,.0f}")
                 f_map = {f"{k}예측": float(d_bands[k].iloc[-1] + (d_bands[k].iloc[-1] - d_bands[k].iloc[-2])) for k in d_keys}
                 f_map.update({f"{k}예측": float(w_bands[k].iloc[-1] + (w_bands[k].iloc[-1] - w_bands[k].iloc[-2])) for k in w_keys})
+                f_map["🚩 현재가"] = curr_price
+                
                 for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
-                    st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
+                    if "현재가" in k:
+                        st.markdown(f"### {k}: {v:,.0f}")
+                    else:
+                        st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")

@@ -6,7 +6,24 @@ from datetime import timedelta
 
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
-STOCKS = {"SK하이닉스": "000660.KS", "삼성전자": "005930.KS"}
+# 종목 리스트 업데이트
+STOCKS = {
+    "SK하이닉스": "000660.KS", 
+    "삼성전자": "005930.KS",
+    "LIG디펜스": "079550.KS",
+    "삼성SDI": "006400.KS",
+    "두산에너빌리티": "034020.KS",
+    "엘앤에프": "066970.KQ",
+    "삼성생명": "032830.KS",
+    "SK스퀘어": "402340.KS",
+    "삼성전기": "009150.KS",
+    "HD건설기계": "267270.KS",
+    "HD현대일렉트릭": "267260.KS",
+    "한화": "000880.KS",
+    "삼성중공업": "010140.KS",
+    "삼성E&A": "028050.KS",
+    "하나금융지주": "086790.KS"
+}
 STD_LIST = [2.0, 1.6, 1.0]
 
 def get_clean_data(ticker, period, interval):
@@ -64,8 +81,8 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             c_up = ['#FFCCCC', '#FF6666', '#FF0000']
             c_lo = ['#CCCCFF', '#6666FF', '#0000FF']
 
-            # 데이터 가시 범위 계산용 변수
-            all_y_values = []
+            # 상단 가시 범위 계산용
+            upper_values = []
 
             # 1. 일봉 차트
             d_keys = list(d_bands.keys())
@@ -74,14 +91,13 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 y_vals = d_bands[key].iloc[-20:].tolist()
                 fig.add_trace(go.Scatter(x=x_range[:20], y=y_vals, name=key, line=dict(color=color, width=1)))
                 
-                # 가시 범위 수집 (일봉 밴드)
-                all_y_values.extend(y_vals)
+                if '상' in key or '중심' in key: upper_values.extend(y_vals)
                 
                 slope = d_bands[key].iloc[-1] - d_bands[key].iloc[-2]
                 pred_y = y_vals[-1] + slope
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                all_y_values.append(pred_y)
+                if '상' in key or '중심' in key: upper_values.append(pred_y)
 
             # 2. 주봉 차트
             w_keys = list(w_bands.keys())
@@ -96,37 +112,36 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                         relative_pos = pos - (len(d_raw) - 20)
                         if 0 <= relative_pos < 20:
                             w_x.append(relative_pos)
+                            if '상' in key or '중심' in key: upper_values.append(w_sub[dt])
                 
                 fig.add_trace(go.Scatter(x=w_x, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
-                all_y_values.extend(w_sub.values.tolist())
                 
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
                 w_pred_y = w_sub.values[-1] + w_slope
                 fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_pred_y], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                all_y_values.append(w_pred_y)
+                if '상' in key or '중심' in key: upper_values.append(w_pred_y)
 
-            # 현재가 및 Y축 스케일 하한선 결정
-            curr_close = d_raw['Close'].iloc[-20:]
-            fig.add_trace(go.Scatter(x=x_range[:20], y=curr_close, name='현재가', line=dict(color='black', width=2)))
-            all_y_values.extend(curr_close.tolist())
+            # 현재가
+            curr_close_v = d_raw['Close'].iloc[-20:]
+            fig.add_trace(go.Scatter(x=x_range[:20], y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
+            upper_values.extend(curr_close_v.tolist())
 
-            # [Y축 스케일 조정 로직]
+            # [Y축 스케일 고정 로직]
             w_center_latest = float(w_bands["주봉 중심"].iloc[-1])
-            # 하한선: 주봉 중심선 vs 현재 데이터 최솟값 중 더 낮은 것 (데이터 잘림 방지)
-            y_min = min(w_center_latest, min(all_y_values))
-            y_max = max(all_y_values)
+            y_min = w_center_latest * 0.99  # 주봉 중심선을 하단 기준으로 고정
+            y_max = max(upper_values) * 1.01 # 존재하는 상단 값 중 최대치
 
             fig.update_layout(
                 height=500, margin=dict(l=5, r=5, t=30, b=5),
                 xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, w_pred_x + 1]),
-                yaxis=dict(tickformat=",", range=[y_min * 0.995, y_max * 1.005]), # 하한선을 주봉 중심선 근처로 타이트하게
+                yaxis=dict(tickformat=",", range=[y_min, y_max]), 
                 hovermode='x unified', showlegend=False
             )
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 리스트 (생략 없음)
+            # 하단 리스트
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             with c1:

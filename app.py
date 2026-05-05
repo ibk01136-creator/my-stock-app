@@ -40,38 +40,36 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             recent_idx = d_raw.index[-20:]
             
             # 1. 주봉 주기 계산 (4/27~5/4 간격 = 4일)
-            b_range = pd.bdate_range(w_raw.index[-2], w_raw.index[-1])
-            b_days = len(b_range) - 1 
+            b_days = len(pd.bdate_range(w_raw.index[-2], w_raw.index[-1])) - 1
             if b_days <= 0: b_days = 5
             
-            # 2. 오늘(5/4) 기준 주봉 확정일부터 며칠 지났나?
-            p_range = pd.bdate_range(w_raw.index[-1], recent_idx[-1])
-            days_passed = len(p_range) - 1 
+            # 2. 오늘 기준 주봉 확정일부터의 경과일
+            days_passed = len(pd.bdate_range(w_raw.index[-1], recent_idx[-1])) - 1
             
-            # 3. 남은 칸수 (기울기 유지를 위해 찍을 위치)
+            # 3. 남은 칸수 (기울기 유지용 위치)
             remain_days = b_days - days_passed
             if remain_days < 1: remain_days = 1
 
-            # --- [수정 핵심] 인덱스와 라벨을 1:1로 강제 매칭 ---
-            # 과거 20개 (0~19번 인덱스)
+            # --- [해결책] 인덱스 번호와 라벨 숫자를 강제로 맞춤 ---
+            # 0~19번 인덱스: 과거 날짜
             date_labels = [d.strftime('%m/%d') for d in recent_idx]
             
-            # 미래 10개 (20~29번 인덱스)
-            # 인덱스 20번에 '+1', 21번에 '+2', 22번에 '+3', 23번에 '+4'가 오도록 함
-            for d in range(1, 11):
-                date_labels.append(f"+{d}")
+            # 20번 인덱스부터는 인덱스 번호 - 19를 한 값이 라벨이 되게 함
+            # 예: 인덱스 20 -> +1, 인덱스 23 -> +4
+            for idx in range(20, 31):
+                date_labels.append(f"+{idx - 19}")
                 
             x_range = list(range(len(date_labels)))
             
-            today_x = 19 # 오늘
-            d_pred_x = 20 # 일봉 예측 (라벨 '+1')
+            today_x = 19 
+            d_pred_x = 20 # 오늘(19) + 1 = 20 (라벨 '+1')
             w_pred_x = today_x + remain_days # 19 + 4 = 23 (라벨 '+4')
 
             fig = go.Figure()
             c_up = ['#FFCCCC', '#FF6666', '#FF0000']
             c_lo = ['#CCCCFF', '#6666FF', '#0000FF']
 
-            # 1. 일봉
+            # 1. 일봉 차트
             d_keys = list(d_bands.keys())
             for key in d_keys:
                 color = 'purple' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
@@ -80,13 +78,15 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 slope = d_bands[key].iloc[-1] - d_bands[key].iloc[-2]
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], y_vals[-1] + slope], line=dict(color=color, width=1, dash='dot'), showlegend=False))
 
-            # 2. 주봉
+            # 2. 주봉 차트 (보라색 중심선 적용)
             w_keys = list(w_bands.keys())
             for key in w_keys:
                 color = '#BA55D3' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
                 w_sub = w_bands[key][w_bands[key].index >= recent_idx[0]]
+                # 과거 주봉 매칭
                 w_x = [date_labels.index(dt.strftime('%m/%d')) for dt in w_sub.index if dt.strftime('%m/%d') in date_labels[:20]]
                 fig.add_trace(go.Scatter(x=w_x, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
+                # 주봉 미래 예측 (동적 위치)
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
                 fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_sub.values[-1] + w_slope], line=dict(color=color, width=1, dash='dot'), showlegend=False))
 
@@ -101,7 +101,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 리스트
+            # 3. 하단 리스트
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             with c1:

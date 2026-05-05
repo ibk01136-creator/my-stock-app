@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import altair as alt
 
 st.set_page_config(page_title="SK/삼성 변동성 전략", layout="wide")
 
@@ -22,9 +21,15 @@ def calculate_bands(data, type_name):
     std = tp.rolling(window=20).std()
     res = {f"{type_name} 중심": ma}
     for s in STD_LIST:
-        res[f"{type_name} {s}상"] = ma + (std * s)
-        res[f"{type_name} {s}하"] = ma - (std * s)
-    return res
+        res[f"{type_name} {s}상"]: ma + (std * s)
+        res[f"{type_name} {s}하"]: ma - (std * s)
+    
+    # 딕셔너리 재구성 (에러 방지용)
+    final_res = {f"{type_name} 중심": ma}
+    for s in STD_LIST:
+        final_res[f"{type_name} {s}상"] = ma + (std * s)
+        final_res[f"{type_name} {s}하"] = ma - (std * s)
+    return final_res
 
 tabs = st.tabs(list(STOCKS.keys()))
 
@@ -37,72 +42,59 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
             
-            # 1. 차트 기본 데이터 (최근 20일)
+            # 1. 차트 데이터 빌드
             recent_idx = d_raw.index[-20:]
             chart_df = pd.DataFrame(index=recent_idx)
             chart_df['현재가'] = d_raw['Close'].iloc[-20:]
+            
             for k, v in d_bands.items(): chart_df[k] = v.iloc[-20:]
             
-            # 주봉 데이터 매칭 (첫 영업일만 찍기)
+            # 주봉: 첫 영업일만 값 할당 (나머지는 NaN 유지하여 선 연결)
             for k, v in w_bands.items():
                 s = pd.Series(index=recent_idx, dtype='float64')
                 intersect = v.index.intersection(recent_idx)
                 s.loc[intersect] = v.loc[intersect]
                 chart_df[k] = s
 
-            # 2. 미래 1일 예측치 계산
-            last_date = recent_idx[-1]
-            next_date = last_date + pd.Timedelta(days=1)
+            # 2. 미래 1일 예측 추가 (연결점 생성)
+            last_dt = recent_idx[-1]
+            next_dt = last_dt + pd.Timedelta(days=1)
             
-            # 3. 차트용 데이터 변환 (KeyError 방지 구조)
-            # 인덱스를 먼저 문자열 날짜로 바꾸고 컬럼화
-            plot_df = chart_df.copy()
-            plot_df.index = plot_df.index.strftime('%m/%d')
-            plot_df = plot_df.reset_index().rename(columns={'index': 'date'})
-            
-            # 미래 예측 포인트 추가 (선 연결용)
-            last_date_str = last_date.strftime('%m/%d')
-            next_date_str = next_date.strftime('%m/%d')
-            
-            pred_entries = []
+            # 예측용 데이터 한 줄 생성
+            forecast_row = {}
             for col in chart_df.columns:
                 if col == '현재가': continue
                 vals = chart_df[col].dropna()
                 if len(vals) >= 2:
                     diff = vals.iloc[-1] - vals.iloc[-2]
-                    pred_val = vals.iloc[-1] + diff
-                    # 마지막 점과 예측 점을 리스트에 추가
-                    pred_entries.append({'date': last_date_str, 'variable': f"{col}예측", 'value': vals.iloc[-1]})
-                    pred_entries.append({'date': next_date_str, 'variable': f"{col}예측", 'value': pred_val})
+                    forecast_row[col] = vals.iloc[-1] + diff
             
-            # 데이터 합치기
-            melted = plot_df.melt(id_vars='date')
-            if pred_entries:
-                melted = pd.concat([melted, pd.DataFrame(pred_entries)], ignore_index=True)
-
-            # 4. 차트 출력 (Y축 스케일 최적화)
-            y_min = float(chart_df.min().min() * 0.98)
-            y_max = float(chart_df.max().max() * 1.02)
-
-            line_chart = alt.Chart(melted).mark_line(interpolate='linear').encode(
-                x=alt.X('date:N', sort=None, title='날짜'),
-                y=alt.Y('value:Q', scale=alt.Scale(domain=[y_min, y_max]), title='가격'),
-                color=alt.Color('variable:N', legend=None)
-            ).properties(height=400)
+            # 3. 차트 출력 (st.line_chart의 개선된 버전 사용)
+            st.subheader(f"📈 {name} 통합 차트")
             
-            st.altair_chart(line_chart, use_container_width=True)
+            # Y축 0원 문제 해결을 위해 전용 옵션 사용
+            plot_df = chart_df.copy()
+            # 예측값 추가 (마지막 행에 붙임)
+            forecast_series = pd.Series(forecast_row, name=next_dt)
+            plot_df = pd.concat([plot_df, forecast_series.to_frame().T])
+            
+            # 인덱스를 문자열로 변환 (MM/DD)
+            plot_df.index = plot_df.index.strftime('%m/%d')
+            
+            # st.line_chart는 최신 버전에서 y축 범위를 자동으로 잡아줍니다.
+            st.line_chart(plot_df)
 
             st.divider()
             
-            # 5. 하단 리스트 (확정 vs 예측)
+            # 4. 하단 가격 리스트
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             
             with c1:
                 st.subheader("📊 금일/금주 확정")
                 p_map = {"현재가": curr_p}
-                for k, v in d_bands.items(): p_map[k] = v.iloc[-1]
-                for k, v in w_bands.items(): p_map[k] = v.iloc[-1]
+                for k, v in d_bands.items(): p_map[k] = float(v.iloc[-1])
+                for k, v in w_bands.items(): p_map[k] = float(v.iloc[-1])
                 for k, v in sorted(p_map.items(), key=lambda x: x[1], reverse=True):
                     p_diff = ((v/curr_p)-1)*100
                     if k == "현재가": st.markdown(f"### 🚩 {k}: {v:,.0f}")
@@ -111,8 +103,8 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             with c2:
                 st.subheader("🔮 내일/차주 예측")
                 f_map = {"현재가": curr_p}
-                for k, v in d_bands.items(): f_map[f"{k}예측"] = v.iloc[-1] + (v.iloc[-1]-v.iloc[-2])
-                for k, v in w_bands.items(): f_map[f"{k}예측"] = v.iloc[-1] + (v.iloc[-1]-v.iloc[-2])
+                for k, v in d_bands.items(): f_map[f"{k}예측"] = float(v.iloc[-1] + (v.iloc[-1]-v.iloc[-2]))
+                for k, v in w_bands.items(): f_map[f"{k}예측"] = float(v.iloc[-1] + (v.iloc[-1]-v.iloc[-2]))
                 for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
                     f_diff = ((v/curr_p)-1)*100
                     if k == "현재가": st.markdown(f"### 🚩 {k}: {v:,.0f}")

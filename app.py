@@ -6,7 +6,7 @@ from datetime import timedelta
 
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
-STOCKS = {"SK하이닉스": "000660.KS", "삼성전자": "005930.KS", "LIG디펜스": "079550.KS", "삼성SDI": "006400.KS", "두산에너빌리티": "034020.KS", "엘앤에프": "066970.KS"}
+STOCKS = {"SK하이닉스": "000660.KS", "삼성전자": "005930.KS"}
 STD_LIST = [2.0, 1.6, 1.0]
 
 def get_clean_data(ticker, period, interval):
@@ -41,43 +41,31 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             today_x = 19
             last_date = recent_idx[-1]
 
-            # --- [개선된 동적 로직: 실제 데이터 기반 간격 계산] ---
-            # 1. 주봉 데이터상의 마지막 두 지점 날짜 가져오기
+            # [동적 영업일 로직]
             prev_w_date = w_raw.index[-2]
             this_w_date = w_raw.index[-1]
-            
-            # 2. 일봉 데이터(실제 장이 열린 날들)에서 두 날짜 사이의 개수를 직접 카운트
-            # '전주 첫영업일'부터 '이번주 첫영업일' 전날까지 실제 몇 개의 일봉이 있었나 확인
             actual_gap_days = len(d_raw[(d_raw.index >= prev_w_date) & (d_raw.index < this_w_date)])
-            
-            # 만약 actual_gap_days가 0이 나오면(데이터 시작점 등), 기본값 5 부여
             if actual_gap_days == 0: actual_gap_days = 5
-            
-            # 3. 이번 주 첫 영업일(this_w_date)부터 오늘(last_date)까지 소모된 일봉 개수
             passed_days = len(d_raw[(d_raw.index >= this_w_date) & (d_raw.index <= last_date)]) - 1
-            
-            # 4. 남은 칸수: 실제 간격 - 소모된 날짜
             remain_days = actual_gap_days - passed_days
-            
-            # 안전장치
             if remain_days < 1: remain_days = 1
-            # ---------------------------------------------------
 
             d_pred_x = today_x + 1 
             w_pred_x = today_x + remain_days 
 
             x_range = list(range(35))
             date_labels = ["" for _ in range(35)]
-            
             for idx, d in enumerate(recent_idx):
                 date_labels[idx] = d.strftime('%m/%d')
-            
             for idx in range(20, 35):
                 date_labels[idx] = f"+{idx - today_x}"
 
             fig = go.Figure()
             c_up = ['#FFCCCC', '#FF6666', '#FF0000']
             c_lo = ['#CCCCFF', '#6666FF', '#0000FF']
+
+            # 데이터 가시 범위 계산용 변수
+            all_y_values = []
 
             # 1. 일봉 차트
             d_keys = list(d_bands.keys())
@@ -86,9 +74,14 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 y_vals = d_bands[key].iloc[-20:].tolist()
                 fig.add_trace(go.Scatter(x=x_range[:20], y=y_vals, name=key, line=dict(color=color, width=1)))
                 
+                # 가시 범위 수집 (일봉 밴드)
+                all_y_values.extend(y_vals)
+                
                 slope = d_bands[key].iloc[-1] - d_bands[key].iloc[-2]
-                fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], y_vals[-1] + slope], 
+                pred_y = y_vals[-1] + slope
+                fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
+                all_y_values.append(pred_y)
 
             # 2. 주봉 차트
             w_keys = list(w_bands.keys())
@@ -98,33 +91,42 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 
                 w_x = []
                 for dt in w_sub.index:
-                    # 일봉 인덱스 내에서 가장 가까운 위치 찾기
                     if dt in d_raw.index:
                         pos = d_raw.index.get_loc(dt)
-                        # 현재 표시중인 20일 구간 내에서의 상대적 위치 계산
                         relative_pos = pos - (len(d_raw) - 20)
                         if 0 <= relative_pos < 20:
                             w_x.append(relative_pos)
                 
                 fig.add_trace(go.Scatter(x=w_x, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
+                all_y_values.extend(w_sub.values.tolist())
                 
-                # 주봉 예측
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
-                fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_sub.values[-1] + w_slope], 
+                w_pred_y = w_sub.values[-1] + w_slope
+                fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_pred_y], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
+                all_y_values.append(w_pred_y)
 
-            fig.add_trace(go.Scatter(x=x_range[:20], y=d_raw['Close'].iloc[-20:], name='현재가', line=dict(color='black', width=2)))
+            # 현재가 및 Y축 스케일 하한선 결정
+            curr_close = d_raw['Close'].iloc[-20:]
+            fig.add_trace(go.Scatter(x=x_range[:20], y=curr_close, name='현재가', line=dict(color='black', width=2)))
+            all_y_values.extend(curr_close.tolist())
+
+            # [Y축 스케일 조정 로직]
+            w_center_latest = float(w_bands["주봉 중심"].iloc[-1])
+            # 하한선: 주봉 중심선 vs 현재 데이터 최솟값 중 더 낮은 것 (데이터 잘림 방지)
+            y_min = min(w_center_latest, min(all_y_values))
+            y_max = max(all_y_values)
 
             fig.update_layout(
                 height=500, margin=dict(l=5, r=5, t=30, b=5),
                 xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, w_pred_x + 1]),
-                yaxis=dict(tickformat=","),
+                yaxis=dict(tickformat=",", range=[y_min * 0.995, y_max * 1.005]), # 하한선을 주봉 중심선 근처로 타이트하게
                 hovermode='x unified', showlegend=False
             )
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 리스트 (동일)
+            # 하단 리스트 (생략 없음)
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             with c1:

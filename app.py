@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 
+st.set_page_config(page_title="주식 감시 도우미", layout="centered")
 st.title("📈 주식 감시 도우미")
 
 # 종목 리스트
@@ -12,16 +13,18 @@ stocks = {
 
 if st.button('오늘의 감시가 계산'):
     for name, ticker in stocks.items():
-        # auto_adjust=True를 넣어 가격 데이터를 단일 형태로 고정
-        data = yf.download(ticker, period="60d", auto_adjust=True)
+        # 데이터를 가장 단순한 형태로 가져오기
+        data = yf.download(ticker, period="60d")
         
         if not data.empty:
-            # 20일 이동평균선 계산
-            # 최근 yfinance 업데이트 대응을 위해 .iloc[:, 0] 등으로 열을 확실히 지정
-            close_prices = data['Close']
-            ma20_series = close_prices.rolling(window=20).mean()
+            # 최근 업데이트 대응: Close 열만 추출하여 숫자로 변환
+            close_series = data['Close'].squeeze()
             
-            curr_price = float(close_prices.iloc[-1])
+            # 20일 이동평균선 계산
+            ma20_series = close_series.rolling(window=20).mean()
+            
+            # 가장 최신 값(숫자)만 추출
+            curr_price = float(close_series.iloc[-1])
             ma20_price = float(ma20_series.iloc[-1])
             
             st.subheader(f"📍 {name}")

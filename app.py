@@ -6,7 +6,7 @@ from datetime import timedelta
 
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
-# 종목 리스트 업데이트
+# 종목 리스트 업데이트 (LIG 명칭 변경 및 한화에어로 제외)
 STOCKS = {
     "SK하이닉스": "000660.KS", 
     "삼성전자": "005930.KS",
@@ -18,7 +18,7 @@ STOCKS = {
     "SK스퀘어": "402340.KS",
     "삼성전기": "009150.KS",
     "HD건설기계": "267270.KS",
-    "HD현대일렉트릭": "267260.KS",
+    "HD일렉트릭": "267260.KS",
     "한화": "000880.KS",
     "삼성중공업": "010140.KS",
     "삼성E&A": "028050.KS",
@@ -81,8 +81,8 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             c_up = ['#FFCCCC', '#FF6666', '#FF0000']
             c_lo = ['#CCCCFF', '#6666FF', '#0000FF']
 
-            # 상단 가시 범위 계산용
-            upper_values = []
+            upper_values = [] # Y축 최댓값 계산용
+            w_center_values = [] # 주봉 중심선 값 수집용
 
             # 1. 일봉 차트
             d_keys = list(d_bands.keys())
@@ -113,6 +113,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                         if 0 <= relative_pos < 20:
                             w_x.append(relative_pos)
                             if '상' in key or '중심' in key: upper_values.append(w_sub[dt])
+                            if '중심' in key: w_center_values.append(w_sub[dt])
                 
                 fig.add_trace(go.Scatter(x=w_x, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
                 
@@ -121,16 +122,18 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_pred_y], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
                 if '상' in key or '중심' in key: upper_values.append(w_pred_y)
+                if '중심' in key: w_center_values.append(w_pred_y)
 
             # 현재가
-            curr_close_v = d_raw['Close'].iloc[-20:]
+            curr_close_v = d_raw['Close'].iloc[-20:].tolist()
             fig.add_trace(go.Scatter(x=x_range[:20], y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
-            upper_values.extend(curr_close_v.tolist())
+            upper_values.extend(curr_close_v)
 
-            # [Y축 스케일 고정 로직]
-            w_center_latest = float(w_bands["주봉 중심"].iloc[-1])
-            y_min = w_center_latest * 0.99  # 주봉 중심선을 하단 기준으로 고정
-            y_max = max(upper_values) * 1.01 # 존재하는 상단 값 중 최대치
+            # [Y축 스케일 최적화 로직]
+            # 현재가 리스트와 주봉 중심선 리스트를 합쳐 그 중 최솟값을 하한선으로 설정
+            scale_min_candidates = curr_close_v + w_center_values
+            y_min = min(scale_min_candidates) * 0.995 # 최저가 기준 약간의 마진
+            y_max = max(upper_values) * 1.005 
 
             fig.update_layout(
                 height=500, margin=dict(l=5, r=5, t=30, b=5),

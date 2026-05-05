@@ -42,7 +42,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             recent_idx = d_raw.index[-20:]
             
             # --- [핵심] 영업일 기반 동적 위치 계산 ---
-            # 1. 주봉 주기 계산 (4/27~5/4 사이의 간격 = 4일)
+            # 1. 주봉 주기 계산 (4/27~5/4 간격 = 4일)
             raw_b_range = pd.bdate_range(w_raw.index[-2], w_raw.index[-1])
             b_days = len(raw_b_range) - 1 
             if b_days <= 0: b_days = 5
@@ -53,11 +53,11 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             
             # 3. 남은 칸수 계산 (주기 - 경과일)
             remain_days = b_days - days_passed
-            if remain_days < 1: remain_days = 1 # 주기가 끝난 후에도 최소 +1 유지
+            if remain_days < 1: remain_days = 1
 
-            # X축 라벨 구성
+            # X축 라벨 구성 (과거 20개 + 미래 10개)
             past_labels = [d.strftime('%m/%d') for d in recent_idx]
-            future_labels = [f"+{d}" for d in range(1, 11)] # +10까지 넉넉히 생성
+            future_labels = [f"+{d}" for d in range(1, 11)] 
             date_labels = past_labels + future_labels
             x_range = list(range(len(date_labels)))
             
@@ -75,9 +75,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             for key in d_keys:
                 color = 'purple' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
                 y_vals = d_bands[key].iloc[-20:].tolist()
-                # 과거 실선
                 fig.add_trace(go.Scatter(x=x_range[:20], y=y_vals, name=key, line=dict(color=color, width=1)))
-                # 미래 점선 (개별 기울기)
                 slope = d_bands[key].iloc[-1] - d_bands[key].iloc[-2]
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], y_vals[-1] + slope], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
@@ -88,9 +86,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 color = '#BA55D3' if '중심' in key else (c_up[STD_LIST.index(float(key.split()[1][:-1]))] if '상' in key else c_lo[STD_LIST.index(float(key.split()[1][:-1]))])
                 w_sub = w_bands[key][w_bands[key].index >= recent_idx[0]]
                 w_x_indices = [past_labels.index(dt.strftime('%m/%d')) for dt in w_sub.index if dt.strftime('%m/%d') in past_labels]
-                # 과거 점쇄선
                 fig.add_trace(go.Scatter(x=w_x_indices, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
-                # 미래 점선 (개별 기울기, 동적 위치)
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
                 fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_sub.values[-1] + w_slope], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
@@ -111,7 +107,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 3. 하단 리스트 (금일 확정 및 미래 예측)
+            # 3. 하단 리스트
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             with c1:

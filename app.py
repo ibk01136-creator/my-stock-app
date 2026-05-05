@@ -39,28 +39,29 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             
             recent_idx = d_raw.index[-20:]
             today_x = 19
-            last_date = recent_idx[-1] # 오늘(혹은 마지막 장대이터 날짜)
+            last_date = recent_idx[-1]
 
-            # --- [핵심 수정: 전주 대비 금주 영업일 기준 로직] ---
+            # --- [개선된 동적 로직: 실제 데이터 기반 간격 계산] ---
+            # 1. 주봉 데이터상의 마지막 두 지점 날짜 가져오기
+            prev_w_date = w_raw.index[-2]
+            this_w_date = w_raw.index[-1]
             
-            # 1. 저번 주 주봉 날짜와 이번 주 주봉 날짜 (보통 월요일 혹은 그 주의 첫 영업일)
-            prev_w_start = w_raw.index[-2]
-            this_w_start = w_raw.index[-1]
+            # 2. 일봉 데이터(실제 장이 열린 날들)에서 두 날짜 사이의 개수를 직접 카운트
+            # '전주 첫영업일'부터 '이번주 첫영업일' 전날까지 실제 몇 개의 일봉이 있었나 확인
+            actual_gap_days = len(d_raw[(d_raw.index >= prev_w_date) & (d_raw.index < this_w_date)])
             
-            # 2. 기준 영업일수(Slope의 기준 거리): 저번 주 첫 영업일부터 이번 주 첫 영업일까지
-            # bdate_range(시작, 종료)는 둘 다 포함하므로 -1
-            base_b_days = len(pd.bdate_range(prev_w_start, this_w_start)) - 1
+            # 만약 actual_gap_days가 0이 나오면(데이터 시작점 등), 기본값 5 부여
+            if actual_gap_days == 0: actual_gap_days = 5
             
-            # 3. 이번 주 들어서 오늘까지 소모된 영업일수
-            passed_b_days = len(pd.bdate_range(this_w_start, last_date)) - 1
+            # 3. 이번 주 첫 영업일(this_w_date)부터 오늘(last_date)까지 소모된 일봉 개수
+            passed_days = len(d_raw[(d_raw.index >= this_w_date) & (d_raw.index <= last_date)]) - 1
             
-            # 4. 남은 칸수 계산 (기울기가 유지되려면 전체 거리만큼 가야 하므로)
-            # 만약 5/6(수)이고 월요일(5/4)에 주봉이 갱신되었다면, 
-            # base_b_days가 4일(휴장포함)일 때 passed는 2일이므로 +2칸 뒤에 점이 찍힘
-            remain_days = base_b_days - passed_b_days
+            # 4. 남은 칸수: 실제 간격 - 소모된 날짜
+            remain_days = actual_gap_days - passed_days
             
+            # 안전장치
             if remain_days < 1: remain_days = 1
-            # ------------------------------------------------
+            # ---------------------------------------------------
 
             d_pred_x = today_x + 1 
             w_pred_x = today_x + remain_days 
@@ -97,18 +98,21 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 
                 w_x = []
                 for dt in w_sub.index:
-                    dt_str = dt.strftime('%m/%d')
-                    if dt_str in date_labels[:20]:
-                        w_x.append(date_labels[:20].index(dt_str))
+                    # 일봉 인덱스 내에서 가장 가까운 위치 찾기
+                    if dt in d_raw.index:
+                        pos = d_raw.index.get_loc(dt)
+                        # 현재 표시중인 20일 구간 내에서의 상대적 위치 계산
+                        relative_pos = pos - (len(d_raw) - 20)
+                        if 0 <= relative_pos < 20:
+                            w_x.append(relative_pos)
                 
                 fig.add_trace(go.Scatter(x=w_x, y=w_sub.values, name=key, line=dict(color=color, width=1, dash='dashdot')))
                 
-                # 주봉 예측 (수정된 w_pred_x 사용)
+                # 주봉 예측
                 w_slope = w_bands[key].iloc[-1] - w_bands[key].iloc[-2]
                 fig.add_trace(go.Scatter(x=[today_x, w_pred_x], y=[w_sub.values[-1], w_sub.values[-1] + w_slope], 
                                          line=dict(color=color, width=1, dash='dot'), showlegend=False))
 
-            # 현재가 실선
             fig.add_trace(go.Scatter(x=x_range[:20], y=d_raw['Close'].iloc[-20:], name='현재가', line=dict(color='black', width=2)))
 
             fig.update_layout(
@@ -120,7 +124,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 리스트
+            # 하단 리스트 (동일)
             curr_p = float(d_raw['Close'].iloc[-1])
             c1, c2 = st.columns(2)
             with c1:

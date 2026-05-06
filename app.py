@@ -14,6 +14,9 @@ STOCKS = {
     "삼성중공업": "010140.KS", "삼성E&A": "028050.KS", "하나금융지주": "086790.KS"
 }
 
+# 비중 계산 제외 기준 종목
+EXCLUDE_STOCKS = ["삼성전자", "SK하이닉스"]
+
 def get_shares_dynamic(ticker):
     try:
         t = yf.Ticker(ticker)
@@ -54,7 +57,22 @@ def get_dynamic_kospi_cap():
         pass
     return 5686_000_000_000_000
 
+# 1. 전체 코스피 시총 확보
 current_total_cap = get_dynamic_kospi_cap()
+
+# 2. 삼성전자, SK하이닉스 시총 별도 계산 (제외용)
+exclude_caps_sum = 0.0
+for name in EXCLUDE_STOCKS:
+    ticker = STOCKS[name]
+    d = get_clean_data(ticker, "5d", "1d")
+    if d is not None:
+        p = float(d['Close'].iloc[-1])
+        s = get_shares_dynamic(ticker)
+        exclude_caps_sum += (p * s)
+
+# 3. 나머지 주식들을 위한 기준 시총 (전체 - 삼전/하닉)
+adjusted_base_cap = current_total_cap - exclude_caps_sum
+
 tabs = st.tabs(list(STOCKS.keys()))
 
 for i, (name, ticker) in enumerate(STOCKS.items()):
@@ -66,30 +84,25 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             curr_price = float(d_raw['Close'].iloc[-1])
             shares = get_shares_dynamic(ticker)
             
+            # --- 비중 계산 로직 수정 ---
             m_ratio = 0.0
-            if shares > 0 and current_total_cap > 0:
+            if shares > 0:
                 m_cap = curr_price * shares
-                m_ratio = float((m_cap / current_total_cap) * 100)
+                # 삼전/하닉이면 전체 대비, 나머지는 삼전/하닉 제외 대비
+                target_base = current_total_cap if name in EXCLUDE_STOCKS else adjusted_base_cap
+                m_ratio = float((m_cap / target_base) * 100)
             
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
             
-            recent_idx = d_raw.index[-20:] # 최근 20거래일
-            today_x = 19 # 오늘 위치
+            recent_idx = d_raw.index[-20:]
+            today_x = 19
             
-            # --- 영업일 기준 미래 칸수 계산 로직 ---
-            this_w_date = w_raw.index[-1] # 이번주 주봉 시작일 (5/4)
-            prev_w_date = w_raw.index[-2] # 지난주 주봉 시작일 (4/27)
-            
-            # 지난 주봉~이번 주봉 사이의 실제 영업일수 (4/27 ~ 5/4 사이 일봉 개수)
-            # 기울기 유지를 위한 기준 간격
+            # 영업일 기준 미래 칸수 계산
+            this_w_date = w_raw.index[-1]
+            prev_w_date = w_raw.index[-2]
             step_days = len(d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)])
             
-            # 이번 주봉 시작일(5/4)로부터 오늘(5/6)까지 경과된 영업일수
-            days_passed_since_w = len(d_raw[d_raw.index > this_w_date]) 
-            
-            # 주봉 미래선이 끝나야 할 X 좌표 (5/4 위치 + step_days)
-            # 일봉 차트상 5/4의 위치 찾기
             try:
                 w_start_x_in_d = d_raw.index.get_loc(this_w_date) - (len(d_raw) - 20)
             except:
@@ -97,7 +110,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             
             w_end_x = w_start_x_in_d + step_days
             d_pred_x = today_x + 1
-            # ------------------------------------
 
             x_range = list(range(40))
             date_labels = ["" for _ in range(40)]
@@ -121,12 +133,11 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
                 if '상' in key or '중심' in key: upper_vals.append(pred_y)
 
-            # 주봉 렌더링 (과거는 5/4에서 끝, 미래는 5/4에서 시작하여 동일 영업일 간격만큼 연장)
+            # 주봉 렌더링
             for key in w_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
                 
-                # 주봉 과거 (이번 주 시작일 5/4 포함)
                 w_sub = w_bands[key][w_bands[key].index <= this_w_date]
                 w_x = [d_raw.index.get_loc(dt) - (len(d_raw) - 20) for dt in w_sub.index if dt in d_raw.index]
                 w_x = [x for x in w_x if 0 <= x < 20]
@@ -137,7 +148,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     if '상' in key or '중심' in key: upper_vals.extend(vals)
                     if '중심' in key: w_center_vals.extend(vals)
                     
-                    # 주봉 미래 (5/4 값에서 시작하여 step_days만큼 떨어진 지점까지)
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
                     w_pred_y = float(vals[-1] + w_slope)
                     
@@ -162,10 +172,11 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 정보 탭
             c1, c2 = st.columns(2)
             with c1:
-                st.subheader("📊 금일 확정")
+                # 비중 텍스트 설명 추가
+                base_info = "전체 코스피" if name in EXCLUDE_STOCKS else "삼전/하닉 제외 코스피"
+                st.subheader(f"📊 금일 확정 ({base_info} 대비)")
                 p_map = {k: float(d_bands[k].iloc[-1]) for k in d_bands}
                 p_map.update({k: float(w_bands[k].iloc[-1]) for k in w_bands})
                 p_map["🚩 현재가"] = curr_price

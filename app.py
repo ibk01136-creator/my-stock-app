@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 # 1. 설정
-st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
+st.set_page_config(page_title="볼린저 비전", layout="wide")
 
 STOCKS = {
     "삼성전자": "005930.KS",

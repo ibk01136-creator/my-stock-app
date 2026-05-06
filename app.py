@@ -3,29 +3,30 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 
-# 1. 페이지 설정 및 다크모드 대응 CSS 추가
+# 1. 앱 설정 및 강력한 CSS 주입 (다크모드 강제 차단)
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
 
-# 다크모드에서도 흰색 배경을 유지하기 위한 CSS 주입
 st.markdown("""
     <style>
-    .main {
-        background-color: white !important;
-        color: black !important;
+    /* 전체 앱 배경 흰색 강제 */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], .main {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
     }
-    header, [data-testid="stHeader"] {
-        background-color: white !important;
-    }
-    div[data-testid="stVerticalBlock"] > div {
-        background-color: white !important;
-    }
-    /* 탭 텍스트 색상 고정 */
+    /* 탭 디자인 및 텍스트 색상 고정 */
     .stTabs [data-baseweb="tab"] {
-        color: #333 !important;
+        color: #000000 !important;
     }
-    /* 텍스트 색상 강제 지정 */
-    h1, h2, h3, p, span, div {
-        color: black !important;
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: #FFFFFF !important;
+    }
+    /* 하단 구분선 색상 */
+    hr {
+        border-color: #EEEEEE !important;
+    }
+    /* 모든 텍스트 검은색 강제 */
+    h1, h2, h3, p, span, div, label {
+        color: #000000 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -41,8 +42,8 @@ STOCKS = {
 EXCLUDE_STOCKS = ["삼성전자", "SK하이닉스"]
 
 # 색상 설정 (2.0=가장 진함, 1.0=가장 옅음)
-C_UP = ['#FF0000', '#FF6666', '#FFCCCC'] # 2.0(진함), 1.6(중간), 1.0(옅음)
-C_LO = ['#0000FF', '#6666FF', '#CCCCFF'] # 2.0(진함), 1.6(중간), 1.0(옅음)
+C_UP = ['#FF0000', '#FF6666', '#FFCCCC'] 
+C_LO = ['#0000FF', '#6666FF', '#CCCCFF']
 STD_LIST = [2.0, 1.6, 1.0]
 
 def get_shares_dynamic(ticker):
@@ -120,7 +121,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             
             recent_idx = d_raw.index[-20:]
             today_x = 19
-            
             this_w_date = w_raw.index[-1]
             prev_w_date = w_raw.index[-2]
             step_days = len(d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)])
@@ -136,6 +136,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             for idx, d in enumerate(recent_idx): date_labels[idx] = d.strftime('%m/%d')
             for idx in range(20, 40): date_labels[idx] = f"+{idx - today_x}"
 
+            # --- Plotly 차트 라이트 모드 강제 고정 ---
             fig = go.Figure()
             upper_vals, w_center_vals = [], []
 
@@ -175,34 +176,25 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     if '상' in key or '중심' in key: upper_vals.extend(vals); upper_vals.append(w_pred_y)
                     if '중심' in key: w_center_vals.extend(vals); w_center_vals.append(w_pred_y)
 
-            # 현재가 렌더링
             curr_close_v = d_raw['Close'].iloc[-20:].tolist()
             fig.add_trace(go.Scatter(x=list(range(20)), y=curr_close_v, name='현재가', line=dict(color='black', width=2.5)))
             
             y_min = min(curr_close_v + (w_center_vals if w_center_vals else curr_close_v)) * 0.99
             y_max = max(upper_vals + curr_close_v) * 1.01
             
-            # --- 다크모드 방지용 Plotly 레이아웃 설정 ---
             fig.update_layout(
-                paper_bgcolor='white', # 전체 배경 흰색
-                plot_bgcolor='white',  # 차트 배경 흰색
-                font=dict(color='black'), # 글씨 검은색
+                template="plotly_white", # 기본 템플릿 라이트 모드로 강제
+                paper_bgcolor='rgba(255,255,255,1)', # 투명도 없는 흰색
+                plot_bgcolor='rgba(255,255,255,1)',
+                font=dict(color='black'),
                 height=550, margin=dict(l=5, r=5, t=30, b=5),
-                xaxis=dict(
-                    tickmode='array', tickvals=x_range, ticktext=date_labels, 
-                    range=[0, max(d_pred_x, w_end_x) + 1], 
-                    gridcolor='#f0f0f0', linecolor='black', tickfont=dict(color='black')
-                ),
-                yaxis=dict(
-                    tickformat=",", range=[y_min, y_max], 
-                    gridcolor='#f0f0f0', linecolor='black', tickfont=dict(color='black')
-                ),
+                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_end_x) + 1], gridcolor='#EEEEEE', linecolor='black', tickfont=dict(color='black')),
+                yaxis=dict(tickformat=",", range=[y_min, y_max], gridcolor='#EEEEEE', linecolor='black', tickfont=dict(color='black')),
                 hovermode='x unified', showlegend=False
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, theme=None) # theme=None 설정이 다크모드 무시에 핵심
             st.divider()
 
-            # 하단 정보 (CSS 영향으로 검은 글씨로 노출됨)
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader(f"📊 금일 확정 ({base_label})")

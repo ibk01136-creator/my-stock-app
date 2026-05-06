@@ -15,9 +15,9 @@ STOCKS = {
 
 EXCLUDE_STOCKS = ["삼성전자", "SK하이닉스"]
 
-# 색상 및 표준편차 설정 (2.0이 가장 옅고, 1.0이 가장 진함)
-C_UP = ['#FFCCCC', '#FF6666', '#FF0000'] # 2.0, 1.6, 1.0 순서
-C_LO = ['#CCCCFF', '#6666FF', '#0000FF'] # 2.0, 1.6, 1.0 순서
+# 색상 설정 재수정 (2.0=가장 진함, 1.0=가장 옅음)
+C_UP = ['#FF0000', '#FF6666', '#FFCCCC'] # 2.0(진함), 1.6(중간), 1.0(옅음) 순서
+C_LO = ['#0000FF', '#6666FF', '#CCCCFF'] # 2.0(진함), 1.6(중간), 1.0(옅음) 순서
 STD_LIST = [2.0, 1.6, 1.0]
 
 def get_shares_dynamic(ticker):
@@ -27,13 +27,12 @@ def get_shares_dynamic(ticker):
         if shares and shares > 0: return float(shares)
         shares = t.info.get('sharesOutstanding')
         if shares and shares > 0: return float(shares)
-    except:
-        pass
+    except: pass
     return 0.0
 
 def get_clean_data(ticker, period, interval):
     data = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
-    if data.empty: return None
+    if data is None or data.empty: return None
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
     return data
@@ -62,14 +61,13 @@ def get_market_baseline():
     for name in EXCLUDE_STOCKS:
         ticker = STOCKS[name]
         d = yf.download(ticker, period="2d", interval="1d", auto_adjust=True, progress=False)
-        if not d.empty:
+        if d is not None and not d.empty:
             if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
             price = float(d['Close'].iloc[-1])
             shares = get_shares_dynamic(ticker)
             ex_sum += (price * shares)
     return total_cap, ex_sum
 
-# 기준 시총 계산
 current_total_cap, exclude_caps_sum = get_market_baseline()
 adjusted_base_cap = current_total_cap - exclude_caps_sum
 
@@ -77,6 +75,9 @@ tabs = st.tabs(list(STOCKS.keys()))
 
 for i, (name, ticker) in enumerate(STOCKS.items()):
     with tabs[i]:
+        base_label = "전체 코스피" if name in EXCLUDE_STOCKS else "삼전/하닉 제외 코스피"
+        m_ratio = 0.0
+        
         d_raw = get_clean_data(ticker, "100d", "1d")
         w_raw = get_clean_data(ticker, "2y", "1wk")
         
@@ -84,13 +85,10 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             curr_price = float(d_raw['Close'].iloc[-1])
             shares = get_shares_dynamic(ticker)
             
-            # 비중 계산
-            m_ratio = 0.0
             if shares > 0:
                 m_cap = curr_price * shares
                 denom = current_total_cap if name in EXCLUDE_STOCKS else (adjusted_base_cap if adjusted_base_cap > 0 else current_total_cap)
                 m_ratio = (m_cap / denom) * 100
-                base_label = "전체 코스피" if name in EXCLUDE_STOCKS else "삼전/하닉 제외 코스피"
 
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
@@ -98,15 +96,12 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             recent_idx = d_raw.index[-20:]
             today_x = 19
             
-            # 영업일 기준 미래 좌표 계산
             this_w_date = w_raw.index[-1]
             prev_w_date = w_raw.index[-2]
             step_days = len(d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)])
             
-            try:
-                w_start_x_in_d = d_raw.index.get_loc(this_w_date) - (len(d_raw) - 20)
-            except:
-                w_start_x_in_d = 0
+            try: w_start_x_in_d = d_raw.index.get_loc(this_w_date) - (len(d_raw) - 20)
+            except: w_start_x_in_d = 0
             
             w_end_x = w_start_x_in_d + step_days
             d_pred_x = today_x + 1
@@ -117,62 +112,51 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             for idx in range(20, 40): date_labels[idx] = f"+{idx - today_x}"
 
             fig = go.Figure()
-            upper_vals = []
-            w_center_vals = []
+            upper_vals, w_center_vals = [], []
 
-            # --- 일봉/주봉 통합 렌더링 로직 ---
-            # 1. 일봉 렌더링
+            # 일봉 렌더링
             for key, series in d_bands.items():
                 if '중심' in key: color = 'purple'
                 else:
                     s_val = float(key.split()[1][:-1])
-                    idx = STD_LIST.index(s_val)
-                    color = C_UP[idx] if '상' in key else C_LO[idx]
+                    c_idx = STD_LIST.index(s_val)
+                    color = C_UP[c_idx] if '상' in key else C_LO[c_idx]
                 
                 y_vals = series.iloc[-20:].tolist()
                 fig.add_trace(go.Scatter(x=list(range(20)), y=y_vals, name=key, line=dict(color=color, width=1.5 if '중심' in key else 1)))
-                
                 slope = float(series.iloc[-1] - series.iloc[-2])
                 pred_y = float(y_vals[-1] + slope)
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                
-                if '상' in key or '중심' in key:
-                    upper_vals.extend(y_vals); upper_vals.append(pred_y)
+                if '상' in key or '중심' in key: upper_vals.extend(y_vals); upper_vals.append(pred_y)
 
-            # 2. 주봉 렌더링
+            # 주봉 렌더링
             for key, series in w_bands.items():
                 if '중심' in key: color = '#BA55D3'
                 else:
                     s_val = float(key.split()[1][:-1])
-                    idx = STD_LIST.index(s_val)
-                    color = C_UP[idx] if '상' in key else C_LO[idx]
+                    c_idx = STD_LIST.index(s_val)
+                    color = C_UP[c_idx] if '상' in key else C_LO[c_idx]
                 
                 w_sub = series[series.index <= this_w_date]
-                w_x = [d_raw.index.get_loc(dt) - (len(d_raw) - 20) for dt in w_sub.index if dt in d_raw.index]
-                w_x = [x for x in w_x if 0 <= x < 20]
+                w_x_list = [d_raw.index.get_loc(dt) - (len(d_raw) - 20) for dt in w_sub.index if dt in d_raw.index]
+                w_x_list = [x for x in w_x_list if 0 <= x < 20]
                 
-                if w_x:
-                    vals = w_sub.values[-len(w_x):].tolist()
-                    fig.add_trace(go.Scatter(x=w_x, y=vals, name=key, line=dict(color=color, width=1, dash='dashdot')))
-                    
+                if w_x_list:
+                    vals = w_sub.values[-len(w_x_list):].tolist()
+                    fig.add_trace(go.Scatter(x=w_x_list, y=vals, name=key, line=dict(color=color, width=1, dash='dashdot')))
                     w_slope = float(series.iloc[-1] - series.iloc[-2])
                     w_pred_y = float(vals[-1] + w_slope)
-                    fig.add_trace(go.Scatter(x=[w_x[-1], w_end_x], y=[vals[-1], w_pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                    
-                    if '상' in key or '중심' in key:
-                        upper_vals.extend(vals); upper_vals.append(w_pred_y)
-                    if '중심' in key:
-                        w_center_vals.extend(vals); w_center_vals.append(w_pred_y)
+                    fig.add_trace(go.Scatter(x=[w_x_list[-1], w_end_x], y=[vals[-1], w_pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
+                    if '상' in key or '중심' in key: upper_vals.extend(vals); upper_vals.append(w_pred_y)
+                    if '중심' in key: w_center_vals.extend(vals); w_center_vals.append(w_pred_y)
 
-            # 3. 현재가 렌더링
+            # 현재가 및 레이아웃
             curr_close_v = d_raw['Close'].iloc[-20:].tolist()
             fig.add_trace(go.Scatter(x=list(range(20)), y=curr_close_v, name='현재가', line=dict(color='black', width=2.5)))
             
-            # 차트 범위 설정
             y_min = min(curr_close_v + (w_center_vals if w_center_vals else curr_close_v)) * 0.99
             y_max = max(upper_vals + curr_close_v) * 1.01
             
-            # 배경색 흰색 고정 및 레이아웃
             fig.update_layout(
                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='black'),
                 height=550, margin=dict(l=5, r=5, t=30, b=5),
@@ -180,11 +164,10 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 yaxis=dict(tickformat=",", range=[y_min, y_max], gridcolor='lightgray', linecolor='black'),
                 hovermode='x unified', showlegend=False
             )
-            
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 정보 출력
+            # 하단 정보
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader(f"📊 금일 확정 ({base_label})")

@@ -63,7 +63,7 @@ def get_clean_data(ticker, period, interval):
 def get_market_baseline():
     total_cap = 5686_000_000_000_000 
     try:
-        kospi = yf.download("^KS11", period="3d", interval="1m", progress=False)
+        kospi = yf.download("^KS11", period="5d", interval="1m", progress=False)
         if not kospi.empty:
             curr_index = float(kospi['Close'].iloc[-1])
             total_cap = 5686_000_000_000_000 * (curr_index / 6936.99)

@@ -3,33 +3,8 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 
-# 1. 앱 설정 및 강력한 CSS 주입 (다크모드 강제 차단)
+# 페이지 설정 (기본 테마 유지, 레이아웃 깨짐 방지)
 st.set_page_config(page_title="변동성 전략 시뮬레이터", layout="wide")
-
-st.markdown("""
-    <style>
-    /* 전체 앱 배경 흰색 강제 */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], .main {
-        background-color: #FFFFFF !important;
-        color: #000000 !important;
-    }
-    /* 탭 디자인 및 텍스트 색상 고정 */
-    .stTabs [data-baseweb="tab"] {
-        color: #000000 !important;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        background-color: #FFFFFF !important;
-    }
-    /* 하단 구분선 색상 */
-    hr {
-        border-color: #EEEEEE !important;
-    }
-    /* 모든 텍스트 검은색 강제 */
-    h1, h2, h3, p, span, div, label {
-        color: #000000 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
 
 STOCKS = {
     "SK하이닉스": "000660.KS", "삼성전자": "005930.KS", "LIG디펜스": "079550.KS",
@@ -136,7 +111,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             for idx, d in enumerate(recent_idx): date_labels[idx] = d.strftime('%m/%d')
             for idx in range(20, 40): date_labels[idx] = f"+{idx - today_x}"
 
-            # --- Plotly 차트 라이트 모드 강제 고정 ---
             fig = go.Figure()
             upper_vals, w_center_vals = [], []
 
@@ -183,16 +157,17 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             y_max = max(upper_vals + curr_close_v) * 1.01
             
             fig.update_layout(
-                template="plotly_white", # 기본 템플릿 라이트 모드로 강제
-                paper_bgcolor='rgba(255,255,255,1)', # 투명도 없는 흰색
-                plot_bgcolor='rgba(255,255,255,1)',
+                template="plotly_white", # 기본 배경 흰색 고정
+                paper_bgcolor='white',
+                plot_bgcolor='white',
                 font=dict(color='black'),
                 height=550, margin=dict(l=5, r=5, t=30, b=5),
-                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_end_x) + 1], gridcolor='#EEEEEE', linecolor='black', tickfont=dict(color='black')),
-                yaxis=dict(tickformat=",", range=[y_min, y_max], gridcolor='#EEEEEE', linecolor='black', tickfont=dict(color='black')),
+                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_end_x) + 1], gridcolor='#EEEEEE', linecolor='black'),
+                yaxis=dict(tickformat=",", range=[y_min, y_max], gridcolor='#EEEEEE', linecolor='black'),
                 hovermode='x unified', showlegend=False
             )
-            st.plotly_chart(fig, use_container_width=True, theme=None) # theme=None 설정이 다크모드 무시에 핵심
+            # theme=None을 사용해야 Streamlit의 다크모드 설정을 무시하고 Plotly 설정을 따릅니다.
+            st.plotly_chart(fig, use_container_width=True, theme=None)
             st.divider()
 
             c1, c2 = st.columns(2)

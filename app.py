@@ -16,7 +16,7 @@ STOCKS = {
 }
 EXCLUDE_STOCKS = ["삼성전자", "SK하이닉스"]
 
-# 2. 데이터 관련 함수 (강력한 캐싱 적용)
+# 2. 데이터 관련 함수
 @st.cache_data(ttl=3600)
 def get_shares_dynamic(ticker):
     try:
@@ -26,13 +26,15 @@ def get_shares_dynamic(ticker):
         return float(shares) if shares else 0.0
     except: return 0.0
 
-@st.cache_data(ttl=300) # 5분간 캐시하여 탭 전환 시 재다운로드 방지
+@st.cache_data(ttl=300)
 def get_clean_data(ticker, period, interval):
-    data = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
-    if data.empty: return None
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    return data
+    try:
+        data = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
+        if data.empty: return None
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        return data
+    except: return None
 
 @st.cache_data(ttl=3600)
 def get_market_baseline():
@@ -65,17 +67,14 @@ def calculate_bands(data, type_name):
         res[f"{type_name} {s}하"] = ma - (std * s)
     return res
 
-# 3. 메인 화면 구성
+# 3. 메인 로직 시작
 current_total_cap, exclude_caps_sum = get_market_baseline()
 adjusted_base_cap = current_total_cap - exclude_caps_sum
 
-# 탭 생성
 tabs = st.tabs(list(STOCKS.keys()))
 
-# 각 탭별로 루프를 돌되, 데이터 다운로드는 탭 내부에서만 발생
 for i, (name, ticker) in enumerate(STOCKS.items()):
     with tabs[i]:
-        # 해당 탭이 활성화될 때만 데이터를 가져오도록 설계 (st.cache_data가 여기서 핵심 역할을 함)
         d_raw = get_clean_data(ticker, "100d", "1d")
         w_raw = get_clean_data(ticker, "2y", "1wk")
 
@@ -83,8 +82,10 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             curr_price = float(d_raw['Close'].iloc[-1])
             shares = get_shares_dynamic(ticker)
             
-            # 비중 계산
+            # --- 변수 초기화 위치 수정 (에러 방지) ---
             m_ratio = 0.0
+            base_label = "데이터 없음" 
+            
             if shares > 0:
                 m_cap = curr_price * shares
                 if name in EXCLUDE_STOCKS:
@@ -98,12 +99,14 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
             
-            # 인덱스 대신 날짜 라벨 사용 (기존 요청사항 반영)
             recent_idx = d_raw.index[-20:]
             today_x = 19
             this_w_date = w_raw.index[-1]
             prev_w_date = w_raw.index[-2]
-            step_days = len(d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)])
+            
+            # 영업일 계산 안전장치
+            step_df = d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)]
+            step_days = len(step_df) if len(step_df) > 0 else 5
             
             w_end_x = today_x + step_days
             d_pred_x = today_x + 1
@@ -117,7 +120,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
             upper_vals, w_center_vals = [], []
 
-            # 일봉/주봉 렌더링
+            # 일봉 렌더링
             for key in d_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = 'purple' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
@@ -129,12 +132,21 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
                 if '상' in key or '중심' in key: upper_vals.extend(y_vals); upper_vals.append(pred_y)
 
+            # 주봉 렌더링
             for key in w_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
                 w_sub = w_bands[key][w_bands[key].index <= this_w_date]
-                w_x = [d_raw.index.get_loc(dt) - (len(d_raw) - 20) for dt in w_sub.index if dt in d_raw.index]
-                w_x = [x for x in w_x if 0 <= x < 20]
+                
+                # 인덱스 매칭 안전장치
+                w_x = []
+                for dt in w_sub.index:
+                    if dt in d_raw.index:
+                        try:
+                            pos = d_raw.index.get_loc(dt) - (len(d_raw) - 20)
+                            if 0 <= pos < 20: w_x.append(pos)
+                        except: pass
+                
                 if w_x:
                     vals = w_sub.values[-len(w_x):].tolist()
                     fig.add_trace(go.Scatter(x=w_x, y=vals, name=key, line=dict(color=color, width=1, dash='dashdot')))
@@ -147,8 +159,8 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             curr_close_v = d_raw['Close'].iloc[-20:].tolist()
             fig.add_trace(go.Scatter(x=list(range(20)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
             
-            y_min = min(curr_close_v + (w_center_vals if w_center_vals else curr_close_v)) * 0.99
-            y_max = max(upper_vals + curr_close_v) * 1.01
+            y_min = min(curr_close_v + (w_center_vals if w_center_vals else curr_close_v)) * 0.98
+            y_max = max(upper_vals + curr_close_v) * 1.02
             
             fig.update_layout(height=500, margin=dict(l=5, r=5, t=30, b=5),
                 xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_end_x) + 1]),
@@ -157,7 +169,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 정보 출력
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader(f"📊 금일 확정 ({base_label} 대비)")
@@ -177,3 +188,5 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
                     if "현재가" in k: st.markdown(f"### {k}: {v:,.0f}")
                     else: st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
+        else:
+            st.error(f"{name} 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")

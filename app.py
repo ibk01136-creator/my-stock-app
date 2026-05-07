@@ -105,7 +105,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_recent = d_raw.iloc[-DISPLAY_DAYS:]
             today_x = DISPLAY_DAYS - 1
             
-            # 주봉 미래 칸(x) 계산 로직
             this_w_idx = w_raw.index[-1]
             prev_w_idx = w_raw.index[-2]
             actual_gap = len(d_raw[(d_raw.index >= prev_w_idx) & (d_raw.index < this_w_idx)])
@@ -131,8 +130,9 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             fig = go.Figure()
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
             
-            # --- Y축 스케일을 위한 모든 값 수집 리스트 ---
-            all_y_values = []
+            # Y축 범위 결정을 위한 데이터 수집
+            top_check = []      # 최대값 후보 (모든 지표)
+            bottom_check = []   # 최솟값 후보 (현재가 & 주봉 중심선만!)
 
             # 1. 일봉 렌더링
             for key in d_bands:
@@ -141,13 +141,11 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 y_vals = d_bands[key].iloc[-DISPLAY_DAYS:].tolist()
                 fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=y_vals, name=key, line=dict(color=color, width=1)))
                 
-                # 일봉 예측
                 slope = float(d_bands[key].iloc[-1] - d_bands[key].iloc[-2])
                 pred_y = float(y_vals[-1] + slope)
-                fig.add_trace(go.Scatter(x=[today_x, d_future_x], y=[y_vals[-1], pred_y], 
-                                         line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                all_y_values.extend(y_vals)
-                all_y_values.append(pred_y)
+                fig.add_trace(go.Scatter(x=[today_x, d_future_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
+                
+                top_check.extend(y_vals + [pred_y])
 
             # 2. 주봉 렌더링
             for key in w_bands:
@@ -162,37 +160,36 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 
                 if w_x:
                     fig.add_trace(go.Scatter(x=w_x, y=w_y, name=key, line=dict(color=color, width=1.3, dash='dashdot')))
-                    # 주봉 예측
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
                     w_pred_y = float(w_y[-1] + w_slope)
-                    fig.add_trace(go.Scatter(x=[w_x[-1], w_future_x], y=[w_y[-1], w_pred_y], 
-                                             line=dict(color=color, width=1.3, dash='dot'), showlegend=False))
-                    all_y_values.extend(w_y)
-                    all_y_values.append(w_pred_y)
+                    fig.add_trace(go.Scatter(x=[w_x[-1], w_future_x], y=[w_y[-1], w_pred_y], line=dict(color=color, width=1.3, dash='dot'), showlegend=False))
+                    
+                    top_check.extend(w_y + [w_pred_y])
+                    # 주봉 중심선은 바닥 체크 대상에 포함
+                    if "중심" in key:
+                        bottom_check.extend(w_y + [w_pred_y])
 
             # 3. 현재가 선
             curr_close_v = d_recent['Close'].tolist()
             fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
-            all_y_values.extend(curr_close_v)
+            top_check.extend(curr_close_v)
+            bottom_check.extend(curr_close_v) # 현재가는 바닥 체크 대상
 
-            # --- Y축 스케일 최적화 ---
-            # 모든 데이터 포인트 중 최소/최대를 구한 뒤 상하 2% 여유를 둠
-            valid_y = [v for v in all_y_values if v is not None and not pd.isna(v)]
-            if valid_y:
-                y_min = min(valid_y) * 0.98
-                y_max = max(valid_y) * 1.02
-            else:
-                y_min, y_max = None, None
+            # --- Y축 스케일 핵심 수정 ---
+            # 바닥(y_min)은 '현재가'와 '주봉 중심선' 중 가장 낮은 값 기준
+            y_min = min([v for v in bottom_check if pd.notna(v)]) * 0.99
+            # 천장(y_max)은 모든 지표 중 가장 높은 값 기준
+            y_max = max([v for v in top_check if pd.notna(v)]) * 1.01
             
             fig.update_layout(height=500, margin=dict(l=5, r=5, t=30, b=5),
                 xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max_x]),
-                yaxis=dict(tickformat=",", range=[y_min, y_max] if y_min else None), 
+                yaxis=dict(tickformat=",", range=[y_min, y_max]), 
                 hovermode='x unified', showlegend=False)
             
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 정보창
+            # 하단 정보 (기존 유지)
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader(f"📊 금일 확정 ({base_label} 대비)")
@@ -210,5 +207,3 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 for k, v in sorted(f_map.items(), key=lambda x: x[1], reverse=True):
                     if "현재가" in k: st.markdown(f"### {k}: {v:,.0f}")
                     else: st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
-        else:
-            st.error(f"{name} 데이터를 불러오지 못했습니다.")

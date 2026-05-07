@@ -2,39 +2,21 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. 설정
 st.set_page_config(page_title="볼린저 비전", layout="wide")
 
 STOCKS = {
-    "삼성전자": "005930.KS",
-    "SK하이닉스": "000660.KS",
-    "SK스퀘어": "402340.KS",
-    "두산에너빌리티": "034020.KS",
-    "삼성전기": "009150.KS",
-    "삼성생명": "032830.KS",
-    "KB금융": "105560.KS",
-    "삼성SDI": "006400.KS",
-    "HD일렉트릭": "267260.KS",
-    "LS일렉트릭": "010120.KS",
-    "미래에셋증권": "006800.KS",
-    "신한지주": "055550.KS",
-    "포스코홀딩스": "005490.KS",
-    "SK": "034730.KS",
-    "하나금융지주": "086790.KS",
-    "두산": "000150.KS",
-    "삼성중공업": "010140.KS",
-    "현대로템": "064350.KS",
-    "LG전자": "066570.KS",
-    "HD현대": "267250.KS",
-    "LIG디펜스": "079550.KS",
-    "SK텔레콤": "017670.KS",
-    "KT&G": "033780.KS",
-    "대한전선": "001440.KS",
-    "삼성E&A": "028050.KS",
-    "한화": "000880.KS",
-    "HD건설기계": "267270.KS",
+    "삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "SK스퀘어": "402340.KS",
+    "두산에너빌리티": "034020.KS", "삼성전기": "009150.KS", "삼성생명": "032830.KS",
+    "KB금융": "105560.KS", "삼성SDI": "006400.KS", "HD일렉트릭": "267260.KS",
+    "LS일렉트릭": "010120.KS", "미래에셋증권": "006800.KS", "신한지주": "055550.KS",
+    "포스코홀딩스": "005490.KS", "SK": "034730.KS", "하나금융지주": "086790.KS",
+    "두산": "000150.KS", "삼성중공업": "010140.KS", "현대로템": "064350.KS",
+    "LG전자": "066570.KS", "HD현대": "267250.KS", "LIG디펜스": "079550.KS",
+    "SK텔레콤": "017670.KS", "KT&G": "033780.KS", "대한전선": "001440.KS",
+    "삼성E&A": "028050.KS", "한화": "000880.KS", "HD건설기계": "267270.KS",
     "엘앤에프": "066970.KS"
 }
 EXCLUDE_STOCKS = ["삼성전자", "SK하이닉스"]
@@ -105,7 +87,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             curr_price = float(d_raw['Close'].iloc[-1])
             shares = get_shares_dynamic(ticker)
             
-            # --- 변수 초기화 위치 수정 (에러 방지) ---
             m_ratio = 0.0
             base_label = "데이터 없음" 
             
@@ -122,22 +103,27 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
             
-            recent_idx = d_raw.index[-20:]
-            today_x = 19
+            # --- X축 좌표 및 날짜 로직 수정 ---
+            recent_d_count = 20
+            d_recent = d_raw.iloc[-recent_d_count:]
+            
+            # 주봉의 간격(영업일수) 계산: 마지막 주봉과 그 직전 주봉 사이의 일봉 개수
             this_w_date = w_raw.index[-1]
             prev_w_date = w_raw.index[-2]
+            actual_step = len(d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)])
+            if actual_step == 0: actual_step = 5 # 데이터 공백 대비 기본값
             
-            # 영업일 계산 안전장치
-            step_df = d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)]
-            step_days = len(step_df) if len(step_df) > 0 else 5
-            
-            w_end_x = today_x + step_days
+            today_x = recent_d_count - 1
             d_pred_x = today_x + 1
+            w_end_x = today_x + actual_step # 마지막 주봉 시작일로부터 실제 영업일 간격만큼 뒤로 보냄
 
-            x_range = list(range(40))
-            date_labels = ["" for _ in range(40)]
-            for idx, d in enumerate(recent_idx): date_labels[idx] = d.strftime('%m/%d')
-            for idx in range(20, 40): date_labels[idx] = f"+{idx - today_x}"
+            # X축 라벨링 (40칸 여유)
+            x_range = list(range(50))
+            date_labels = ["" for _ in range(50)]
+            for idx, d_idx in enumerate(d_recent.index):
+                date_labels[idx] = d_idx.strftime('%m/%d')
+            for idx in range(recent_d_count, 50):
+                date_labels[idx] = f"+{idx - today_x}"
 
             fig = go.Figure()
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
@@ -147,9 +133,10 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             for key in d_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = 'purple' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
-                y_vals = d_bands[key].iloc[-20:].tolist()
-                fig.add_trace(go.Scatter(x=list(range(20)), y=y_vals, name=key, line=dict(color=color, width=1)))
+                y_vals = d_bands[key].iloc[-recent_d_count:].tolist()
+                fig.add_trace(go.Scatter(x=list(range(recent_d_count)), y=y_vals, name=key, line=dict(color=color, width=1)))
                 
+                # 일봉 예측 (다음 1영업일)
                 slope = float(d_bands[key].iloc[-1] - d_bands[key].iloc[-2])
                 pred_y = float(y_vals[-1] + slope)
                 fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
@@ -159,39 +146,40 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             for key in w_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
-                w_sub = w_bands[key][w_bands[key].index <= this_w_date]
                 
-                # 인덱스 매칭 안전장치
-                w_x = []
-                for dt in w_sub.index:
-                    if dt in d_raw.index:
-                        try:
-                            pos = d_raw.index.get_loc(dt) - (len(d_raw) - 20)
-                            if 0 <= pos < 20: w_x.append(pos)
-                        except: pass
+                # 과거 주봉 매핑
+                w_sub = w_bands[key][w_bands[key].index <= this_w_date]
+                w_x, w_y = [], []
+                for w_dt, val in w_sub.items():
+                    if w_dt in d_recent.index:
+                        pos = d_recent.index.get_loc(w_dt)
+                        w_x.append(pos)
+                        w_y.append(val)
                 
                 if w_x:
-                    vals = w_sub.values[-len(w_x):].tolist()
-                    fig.add_trace(go.Scatter(x=w_x, y=vals, name=key, line=dict(color=color, width=1, dash='dashdot')))
+                    fig.add_trace(go.Scatter(x=w_x, y=w_y, name=key, line=dict(color=color, width=1.2, dash='dashdot')))
+                    # 주봉 예측 (실제 영업일 간격 반영)
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
-                    w_pred_y = float(vals[-1] + w_slope)
-                    fig.add_trace(go.Scatter(x=[w_x[-1], w_end_x], y=[vals[-1], w_pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                    if '상' in key or '중심' in key: upper_vals.extend(vals); upper_vals.append(w_pred_y)
-                    if '중심' in key: w_center_vals.extend(vals); w_center_vals.append(w_pred_y)
+                    w_pred_y = float(w_y[-1] + w_slope)
+                    fig.add_trace(go.Scatter(x=[w_x[-1], w_end_x], y=[w_y[-1], w_pred_y], line=dict(color=color, width=1.2, dash='dot'), showlegend=False))
+                    if '상' in key or '중심' in key: upper_vals.append(w_pred_y)
+                    if '중심' in key: w_center_vals.append(w_pred_y)
 
-            curr_close_v = d_raw['Close'].iloc[-20:].tolist()
-            fig.add_trace(go.Scatter(x=list(range(20)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
+            # 현재가 캔들 (종가선)
+            curr_close_v = d_recent['Close'].tolist()
+            fig.add_trace(go.Scatter(x=list(range(recent_d_count)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
             
             y_min = min(curr_close_v + (w_center_vals if w_center_vals else curr_close_v)) * 0.98
             y_max = max(upper_vals + curr_close_v) * 1.02
             
             fig.update_layout(height=500, margin=dict(l=5, r=5, t=30, b=5),
-                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_end_x) + 1]),
+                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_end_x) + 2]),
                 yaxis=dict(tickformat=",", range=[y_min, y_max]), hovermode='x unified', showlegend=False)
             
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
+            # 하단 정보창
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader(f"📊 금일 확정 ({base_label} 대비)")
@@ -212,4 +200,4 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     if "현재가" in k: st.markdown(f"### {k}: {v:,.0f}")
                     else: st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
         else:
-            st.error(f"{name} 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
+            st.error(f"{name} 데이터를 불러오지 못했습니다.")

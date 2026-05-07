@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 1. 설정
 st.set_page_config(page_title="볼린저 비전", layout="wide")
@@ -50,7 +50,6 @@ def get_market_baseline():
             curr_index = float(kospi['Close'].iloc[-1])
             total_cap = 5686_000_000_000_000 * (curr_index / 6936.99)
     except: pass
-
     ex_sum = 0.0
     for name in EXCLUDE_STOCKS:
         ticker = STOCKS[name]
@@ -89,7 +88,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             
             m_ratio = 0.0
             base_label = "데이터 없음" 
-            
             if shares > 0:
                 m_cap = curr_price * shares
                 if name in EXCLUDE_STOCKS:
@@ -103,83 +101,97 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
             
-            # --- X축 좌표 및 날짜 로직 수정 ---
-            recent_d_count = 20
-            d_recent = d_raw.iloc[-recent_d_count:]
+            # --- 고정된 파라미터 ---
+            DISPLAY_DAYS = 20 
+            d_recent = d_raw.iloc[-DISPLAY_DAYS:]
+            today_x = DISPLAY_DAYS - 1
             
-            # 주봉의 간격(영업일수) 계산: 마지막 주봉과 그 직전 주봉 사이의 일봉 개수
-            this_w_date = w_raw.index[-1]
-            prev_w_date = w_raw.index[-2]
-            actual_step = len(d_raw[(d_raw.index > prev_w_date) & (d_raw.index <= this_w_date)])
-            if actual_step == 0: actual_step = 5 # 데이터 공백 대비 기본값
+            # --- 주봉 미래 칸(x) 계산 로직 수정 ---
+            # 1. 마지막 주봉(이번주)과 직전 주봉(지난주)의 인덱스 날짜 확인
+            this_w_idx = w_raw.index[-1]
+            prev_w_idx = w_raw.index[-2]
             
-            today_x = recent_d_count - 1
-            d_pred_x = today_x + 1
-            w_end_x = today_x + actual_step # 마지막 주봉 시작일로부터 실제 영업일 간격만큼 뒤로 보냄
+            # 2. 두 주봉 '시작일' 사이의 실제 영업일 수 계산
+            # (이 수치가 바로 차트상에서 주봉 점 사이의 '거리'가 됨)
+            actual_gap = len(d_raw[(d_raw.index >= prev_w_idx) & (d_raw.index < this_w_idx)])
+            
+            # 3. 만약 이번주가 시작된지 얼마 안되어 실제 영업일 데이터가 부족할 경우를 대비해 
+            # 최소 1일 이상의 gap을 보장함 (기본값은 보통 5일이나 공휴일 끼면 4일 등이 됨)
+            if actual_gap == 0: actual_gap = 5
+            
+            # 4. 미래 주봉의 X 좌표는 [현재 주봉 위치 + 실제 계산된 간격]
+            # 현재 주봉의 위치(x)를 먼저 찾음
+            try:
+                this_w_pos_x = d_recent.index.get_loc(this_w_idx)
+            except KeyError:
+                # 이번주 월요일이 공휴일이라 일봉 데이터가 없으면 가장 가까운 미래 영업일 찾음
+                this_w_pos_x = next((idx for idx, dt in enumerate(d_recent.index) if dt >= this_w_idx), today_x)
 
-            # X축 라벨링 (40칸 여유)
-            x_range = list(range(50))
-            date_labels = ["" for _ in range(50)]
+            w_future_x = this_w_pos_x + actual_gap
+            d_future_x = today_x + 1
+
+            # X축 라벨링
+            max_x = max(d_future_x, w_future_x) + 3
+            x_range = list(range(max_x + 5))
+            date_labels = ["" for _ in x_range]
             for idx, d_idx in enumerate(d_recent.index):
                 date_labels[idx] = d_idx.strftime('%m/%d')
-            for idx in range(recent_d_count, 50):
+            for idx in range(DISPLAY_DAYS, len(date_labels)):
                 date_labels[idx] = f"+{idx - today_x}"
 
             fig = go.Figure()
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
-            upper_vals, w_center_vals = [], []
+            upper_vals = []
 
-            # 일봉 렌더링
+            # 1. 일봉 렌더링
             for key in d_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = 'purple' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
-                y_vals = d_bands[key].iloc[-recent_d_count:].tolist()
-                fig.add_trace(go.Scatter(x=list(range(recent_d_count)), y=y_vals, name=key, line=dict(color=color, width=1)))
+                y_vals = d_bands[key].iloc[-DISPLAY_DAYS:].tolist()
+                fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=y_vals, name=key, line=dict(color=color, width=1)))
                 
-                # 일봉 예측 (다음 1영업일)
+                # 일봉 예측
                 slope = float(d_bands[key].iloc[-1] - d_bands[key].iloc[-2])
-                pred_y = float(y_vals[-1] + slope)
-                fig.add_trace(go.Scatter(x=[today_x, d_pred_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
-                if '상' in key or '중심' in key: upper_vals.extend(y_vals); upper_vals.append(pred_y)
+                fig.add_trace(go.Scatter(x=[today_x, d_future_x], y=[y_vals[-1], y_vals[-1] + slope], 
+                                         line=dict(color=color, width=1, dash='dot'), showlegend=False))
+                upper_vals.extend(y_vals)
 
-            # 주봉 렌더링
+            # 2. 주봉 렌더링
             for key in w_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
                 
-                # 과거 주봉 매핑
-                w_sub = w_bands[key][w_bands[key].index <= this_w_date]
+                # 과거 주봉 매핑 (현재 표시되는 20일 영역 내)
                 w_x, w_y = [], []
-                for w_dt, val in w_sub.items():
+                for w_dt, val in w_bands[key].items():
                     if w_dt in d_recent.index:
-                        pos = d_recent.index.get_loc(w_dt)
-                        w_x.append(pos)
+                        w_x.append(d_recent.index.get_loc(w_dt))
                         w_y.append(val)
                 
                 if w_x:
-                    fig.add_trace(go.Scatter(x=w_x, y=w_y, name=key, line=dict(color=color, width=1.2, dash='dashdot')))
-                    # 주봉 예측 (실제 영업일 간격 반영)
+                    fig.add_trace(go.Scatter(x=w_x, y=w_y, name=key, line=dict(color=color, width=1.3, dash='dashdot')))
+                    # 주봉 예측 (계산된 actual_gap 적용)
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
                     w_pred_y = float(w_y[-1] + w_slope)
-                    fig.add_trace(go.Scatter(x=[w_x[-1], w_end_x], y=[w_y[-1], w_pred_y], line=dict(color=color, width=1.2, dash='dot'), showlegend=False))
-                    if '상' in key or '중심' in key: upper_vals.append(w_pred_y)
-                    if '중심' in key: w_center_vals.append(w_pred_y)
+                    fig.add_trace(go.Scatter(x=[w_x[-1], w_future_x], y=[w_y[-1], w_pred_y], 
+                                             line=dict(color=color, width=1.3, dash='dot'), showlegend=False))
+                    upper_vals.append(w_pred_y)
 
-            # 현재가 캔들 (종가선)
+            # 3. 현재가 선
             curr_close_v = d_recent['Close'].tolist()
-            fig.add_trace(go.Scatter(x=list(range(recent_d_count)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
+            fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
             
-            y_min = min(curr_close_v + (w_center_vals if w_center_vals else curr_close_v)) * 0.98
+            y_min = min(curr_close_v) * 0.98
             y_max = max(upper_vals + curr_close_v) * 1.02
             
             fig.update_layout(height=500, margin=dict(l=5, r=5, t=30, b=5),
-                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max(d_pred_x, w_end_x) + 2]),
+                xaxis=dict(tickmode='array', tickvals=x_range, ticktext=date_labels, range=[0, max_x]),
                 yaxis=dict(tickformat=",", range=[y_min, y_max]), hovermode='x unified', showlegend=False)
             
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 정보창
+            # 하단 정보창 (기존과 동일)
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader(f"📊 금일 확정 ({base_label} 대비)")
@@ -187,10 +199,8 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 p_map.update({k: float(w_bands[k].iloc[-1]) for k in w_bands})
                 p_map["🚩 현재가"] = curr_price
                 for k, v in sorted(p_map.items(), key=lambda x: x[1], reverse=True):
-                    if "현재가" in k:
-                        st.markdown(f"### {k}: {v:,.0f} <span style='font-size:15px; color:gray;'>(비중: {m_ratio:.2f}%)</span>", unsafe_allow_html=True)
-                    else:
-                        st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
+                    if "현재가" in k: st.markdown(f"### {k}: {v:,.0f} <span style='font-size:15px; color:gray;'>(비중: {m_ratio:.2f}%)</span>", unsafe_allow_html=True)
+                    else: st.write(f"{k}: **{v:,.0f}** ({((v/curr_price)-1)*100:+.2f}%)")
             with c2:
                 st.subheader(f"🔮 미래 예측")
                 f_map = {f"{k}예측": float(d_bands[k].iloc[-1] + (d_bands[k].iloc[-1] - d_bands[k].iloc[-2])) for k in d_bands}

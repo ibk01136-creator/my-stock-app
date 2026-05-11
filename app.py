@@ -105,15 +105,18 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_recent = d_raw.iloc[-DISPLAY_DAYS:]
             today_x = DISPLAY_DAYS - 1
             
+            # 주봉 위치 계산 수정
             this_w_idx = w_raw.index[-1]
             prev_w_idx = w_raw.index[-2]
             actual_gap = len(d_raw[(d_raw.index >= prev_w_idx) & (d_raw.index < this_w_idx)])
             if actual_gap == 0: actual_gap = 5
             
+            # 주봉 데이터의 마지막 날짜가 일봉 범위 내에 있는지 확인 (수정)
             try:
                 this_w_pos_x = d_recent.index.get_loc(this_w_idx)
             except KeyError:
-                this_w_pos_x = next((idx for idx, dt in enumerate(d_recent.index) if dt >= this_w_idx), today_x)
+                # 인덱스가 없으면 오늘 위치를 주봉의 마지막 위치로 간주
+                this_w_pos_x = today_x
 
             w_future_x = this_w_pos_x + actual_gap
             d_future_x = today_x + 1
@@ -130,9 +133,8 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             fig = go.Figure()
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
             
-            # Y축 범위 결정을 위한 데이터 수집
-            top_check = []      # 최대값 후보 (모든 지표)
-            bottom_check = []   # 최솟값 후보 (현재가 & 주봉 중심선만!)
+            top_check = []
+            bottom_check = []
 
             # 1. 일봉 렌더링
             for key in d_bands:
@@ -147,17 +149,23 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 
                 top_check.extend(y_vals + [pred_y])
 
-            # 2. 주봉 렌더링
+            # 2. 주봉 렌더링 (수정: 매칭 로직 보강)
             for key in w_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
                 
                 w_x, w_y = [], []
+                # 과거 주봉 데이터 매칭
                 for w_dt, val in w_bands[key].items():
                     if w_dt in d_recent.index:
                         w_x.append(d_recent.index.get_loc(w_dt))
                         w_y.append(val)
                 
+                # 이번 주 데이터 강제 추가 (만약 누락되었다면 마지막 값을 오늘 위치에 표시)
+                if len(w_x) > 0 and w_x[-1] < today_x:
+                    w_x.append(today_x)
+                    w_y.append(float(w_bands[key].iloc[-1]))
+
                 if w_x:
                     fig.add_trace(go.Scatter(x=w_x, y=w_y, name=key, line=dict(color=color, width=1.3, dash='dashdot')))
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
@@ -165,7 +173,6 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     fig.add_trace(go.Scatter(x=[w_x[-1], w_future_x], y=[w_y[-1], w_pred_y], line=dict(color=color, width=1.3, dash='dot'), showlegend=False))
                     
                     top_check.extend(w_y + [w_pred_y])
-                    # 주봉 중심선은 바닥 체크 대상에 포함
                     if "중심" in key:
                         bottom_check.extend(w_y + [w_pred_y])
 
@@ -173,12 +180,9 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             curr_close_v = d_recent['Close'].tolist()
             fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
             top_check.extend(curr_close_v)
-            bottom_check.extend(curr_close_v) # 현재가는 바닥 체크 대상
+            bottom_check.extend(curr_close_v)
 
-            # --- Y축 스케일 핵심 수정 ---
-            # 바닥(y_min)은 '현재가'와 '주봉 중심선' 중 가장 낮은 값 기준
             y_min = min([v for v in bottom_check if pd.notna(v)]) * 0.99
-            # 천장(y_max)은 모든 지표 중 가장 높은 값 기준
             y_max = max([v for v in top_check if pd.notna(v)]) * 1.01
             
             fig.update_layout(height=500, margin=dict(l=5, r=5, t=30, b=5),
@@ -189,7 +193,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-            # 하단 정보 (기존 유지)
+            # 하단 정보
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader(f"📊 금일 확정 ({base_label} 대비)")

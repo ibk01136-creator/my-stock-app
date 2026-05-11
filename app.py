@@ -79,24 +79,27 @@ tabs = st.tabs(list(STOCKS.keys()))
 
 for i, (name, ticker) in enumerate(STOCKS.items()):
     with tabs[i]:
-        d_raw = get_clean_data(ticker, "100d", "1d")
+        d_raw = get_clean_data(ticker, "200d", "1d")
         w_raw = get_clean_data(ticker, "2y", "1wk")
 
         if d_raw is not None and w_raw is not None:
+            # 실시간 주봉 업데이트 로직 추가
+            last_d_date = d_raw.index[-1]
+            last_w_date = w_raw.index[-1]
+            
+            # 주봉 데이터가 이번 주를 포함하지 않을 경우 일봉으로 강제 합성
+            if last_d_date > last_w_date:
+                new_w_row = d_raw[d_raw.index > last_w_date].resample('W-MON').agg({
+                    'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'
+                })
+                w_raw = pd.concat([w_raw, new_w_row])
+                w_raw = w_raw[~w_raw.index.duplicated(keep='last')]
+
             curr_price = float(d_raw['Close'].iloc[-1])
             shares = get_shares_dynamic(ticker)
             
-            m_ratio = 0.0
-            base_label = "데이터 없음" 
-            if shares > 0:
-                m_cap = curr_price * shares
-                if name in EXCLUDE_STOCKS:
-                    m_ratio = (m_cap / current_total_cap) * 100
-                    base_label = "전체 코스피"
-                else:
-                    denominator = adjusted_base_cap if adjusted_base_cap > 0 else current_total_cap
-                    m_ratio = (m_cap / denominator) * 100
-                    base_label = "삼전/하닉 제외 코스피"
+            m_ratio = (curr_price * shares / (current_total_cap if name in EXCLUDE_STOCKS else adjusted_base_cap)) * 100
+            base_label = "전체 코스피" if name in EXCLUDE_STOCKS else "삼전/하닉 제외 코스피"
 
             d_bands = calculate_bands(d_raw, "일봉")
             w_bands = calculate_bands(w_raw, "주봉")
@@ -105,16 +108,10 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_recent = d_raw.iloc[-DISPLAY_DAYS:]
             today_x = DISPLAY_DAYS - 1
             
-            # 주봉 간격 및 미래 위치 계산 (수정됨)
+            # 주봉 미래 위치 계산
             this_w_idx = w_raw.index[-1]
-            prev_w_idx = w_raw.index[-2]
-            # 지난 주 첫 영업일로부터 오늘까지의 실제 일봉 개수(영업일) 계산
-            actual_gap = len(d_raw[(d_raw.index >= prev_w_idx) & (d_raw.index < this_w_idx)])
-            if actual_gap == 0: actual_gap = 5
-            
-            # 미래 위치: 오늘(today_x) + (한 주 영업일 - 지난 주 첫날부터 오늘까지 경과일)
-            days_passed_in_week = len(d_raw[d_raw.index >= this_w_idx])
-            w_future_x = today_x + (actual_gap - days_passed_in_week + 1)
+            days_passed = len(d_raw[d_raw.index >= this_w_idx])
+            w_future_x = today_x + (5 - days_passed) 
             d_future_x = today_x + 1
 
             # X축 라벨링
@@ -134,7 +131,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             for key in d_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = 'purple' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
-                y_vals = d_bands[key].iloc[-DISPLAY_DAYS:].tolist()
+                y_vals = d_bands[key].reindex(d_recent.index).tolist()
                 fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=y_vals, name=key, line=dict(color=color, width=1)))
                 
                 slope = float(d_bands[key].iloc[-1] - d_bands[key].iloc[-2])
@@ -142,7 +139,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                 fig.add_trace(go.Scatter(x=[today_x, d_future_x], y=[y_vals[-1], pred_y], line=dict(color=color, width=1, dash='dot'), showlegend=False))
                 top_check.extend(y_vals + [pred_y])
 
-            # 2. 주봉 렌더링 (계단식 제거 및 기울기 수정)
+            # 2. 주봉 렌더링 (계단식 제거 및 영업일 기준 위치 고정)
             for key in w_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
                 color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
@@ -153,10 +150,12 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                         w_x.append(d_recent.index.get_loc(w_dt))
                         w_y.append(val)
                 
-                # 이번 주 데이터가 인덱스에 없어도 마지막 값은 오늘 위치에 표시
-                if not w_x or (this_w_idx not in d_recent.index and this_w_idx > d_recent.index[-1]):
-                     w_x.append(today_x)
-                     w_y.append(w_bands[key].iloc[-1])
+                # 이번 주 데이터 포인트 강제 추가 (오늘 위치)
+                if this_w_idx >= d_recent.index[0]:
+                    w_pos = d_recent.index.get_loc(this_w_idx) if this_w_idx in d_recent.index else today_x
+                    if w_pos not in w_x:
+                        w_x.append(w_pos)
+                        w_y.append(w_bands[key].iloc[-1])
 
                 if w_x:
                     fig.add_trace(go.Scatter(x=w_x, y=w_y, name=key, mode='lines+markers', line=dict(color=color, width=1.3, dash='dashdot'), marker=dict(size=4)))
@@ -169,7 +168,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     top_check.extend(w_y + [w_pred_y])
                     if "중심" in key: bottom_check.extend(w_y + [w_pred_y])
 
-            # 3. 현재가 선
+            # 3. 현재가
             curr_close_v = d_recent['Close'].tolist()
             fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
             top_check.extend(curr_close_v)

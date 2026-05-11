@@ -7,7 +7,6 @@ from datetime import datetime
 # 1. 설정
 st.set_page_config(page_title="볼린저 비전", layout="wide")
 
-# 종목명 원상복구 (LIG디펜스, HD건설기계 등)
 STOCKS = {
     "삼성전자": "005930", "SK하이닉스": "000660", "SK스퀘어": "402340",
     "두산에너빌리티": "034020", "삼성전기": "009150", "삼성생명": "032830",
@@ -27,17 +26,14 @@ def get_clean_data(ticker, period_days, interval='d'):
     try:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (pd.Timestamp.now() - pd.Timedelta(days=period_days)).strftime('%Y-%m-%d')
-        
         data = fdr.DataReader(ticker, start_date, end_date)
         if interval == 'wk':
             data = data.resample('W-MON').last()
-            
         if data.empty: return None
         return data
     except: return None
 
 def calculate_bands(data, type_name):
-    # TP를 종가(Close)로만 계산
     tp = data['Close']
     ma = tp.rolling(window=20).mean()
     std = tp.rolling(window=20).std()
@@ -47,7 +43,7 @@ def calculate_bands(data, type_name):
         res[f"{type_name} {s}하"] = ma - (std * s)
     return res
 
-# 3. 메인 로직 (시총 로직 제거)
+# 3. 메인 로직
 tabs = st.tabs(list(STOCKS.keys()))
 
 for i, (name, ticker) in enumerate(STOCKS.items()):
@@ -64,7 +60,12 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             d_recent = d_raw.iloc[-DISPLAY_DAYS:]
             today_x = DISPLAY_DAYS - 1
             
-            # 주봉 인덱스 매칭용 계산
+            # X축 날짜 라벨 준비
+            date_labels = [d.strftime('%m/%d') for d in d_recent.index]
+            # 예측 영역 라벨 추가 (+1일 등)
+            date_labels += [f"+{j}" for j in range(1, 10)]
+
+            # 주봉 위치 계산
             this_w_idx = w_raw.index[-1]
             prev_w_idx = w_raw.index[-2]
             actual_gap = len(d_raw[(d_raw.index >= prev_w_idx) & (d_raw.index < this_w_idx)])
@@ -80,7 +81,10 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
 
             fig = go.Figure()
             c_up, c_lo = ['#FFCCCC', '#FF6666', '#FF0000'], ['#CCCCFF', '#6666FF', '#0000FF']
+            
+            # 스케일 조절을 위한 데이터 수집
             top_check = []
+            bottom_check = []
 
             # 1. 일봉 렌더링
             for key in d_bands:
@@ -108,21 +112,26 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
                     w_pred_y = float(w_y[-1] + w_slope)
                     fig.add_trace(go.Scatter(x=[w_x[-1], w_future_x], y=[w_y[-1], w_pred_y], line=dict(color=color, width=1.3, dash='dot'), showlegend=False))
+                    # 주봉 중심선은 바닥 체크 대상
+                    if "중심" in key:
+                        bottom_check.extend(w_y + [w_pred_y])
 
             # 3. 현재가 선
             curr_close_v = d_recent['Close'].tolist()
             fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=curr_close_v, name='현재가', line=dict(color='black', width=2)))
+            bottom_check.extend(curr_close_v) # 현재가 바닥 체크 대상 추가
+
+            # Y축 스케일 최적화
+            y_min = min([v for v in bottom_check if pd.notna(v)]) * 0.99
+            y_max = max([v for v in top_check if pd.notna(v)]) * 1.01
             
-            y_min = min([v for v in curr_close_v if pd.notna(v)]) * 0.98
-            y_max = max([v for v in top_check if pd.notna(v)]) * 1.02
-            
-            fig.update_layout(height=550, margin=dict(l=10, r=10, t=30, b=10),
+            fig.update_layout(height=450, margin=dict(l=10, r=10, t=30, b=10),
+                xaxis=dict(tickmode='array', tickvals=list(range(len(date_labels))), ticktext=date_labels, range=[0, d_future_x + 2]),
                 yaxis=dict(tickformat=",", range=[y_min, y_max]), 
                 hovermode='x unified', showlegend=False)
             
             st.plotly_chart(fig, use_container_width=True)
 
-            # 하단 텍스트 정보
             st.divider()
             c1, c2 = st.columns(2)
             with c1:

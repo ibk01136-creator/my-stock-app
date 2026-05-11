@@ -125,7 +125,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             y_min = min([v for v in bottom_check if pd.notna(v)]) * 0.99
             y_max = max([v for v in top_check if pd.notna(v)]) * 1.01
             
-            fig.update_layout(height=450, margin=dict(l=10, r=10, t=30, b=10),
+            fig.update_layout(height=500, margin=dict(l=10, r=10, t=30, b=10),
                 xaxis=dict(tickmode='array', tickvals=list(range(len(date_labels))), ticktext=date_labels, range=[0, d_future_x + 2]),
                 yaxis=dict(tickformat=",", range=[y_min, y_max]), 
                 hovermode='x unified', showlegend=False)

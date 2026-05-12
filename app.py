@@ -13,7 +13,7 @@ STOCKS = {
     "KB금융": "105560", "삼성SDI": "006400", "HD일렉트릭": "267260",
     "LS일렉트릭": "010120", "미래에셋증권": "006800", "신한지주": "055550",
     "포스코홀딩스": "005490", "SK": "034730", "하나금융지주": "086790",
-    "두산": "000150", "삼성중공업": "010140", "현대로템": "064350",
+    "두산": "000150", "삼성중공업": "010140",
     "LG전자": "066570", "HD현대": "267250", "LIG디펜스": "079550",
     "SK텔레콤": "017670", "KT&G": "033780", "대한전선": "001440",
     "삼성E&A": "028050", "한화": "000880", "HD건설기계": "267270",
@@ -112,6 +112,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
                     w_slope = float(w_bands[key].iloc[-1] - w_bands[key].iloc[-2])
                     w_pred_y = float(w_y[-1] + w_slope)
                     fig.add_trace(go.Scatter(x=[w_x[-1], w_future_x], y=[w_y[-1], w_pred_y], line=dict(color=color, width=1.3, dash='dot'), showlegend=False))
+                    top_check.extend(w_y + [w_pred_y])
                     # 주봉 중심선은 바닥 체크 대상
                     if "중심" in key:
                         bottom_check.extend(w_y + [w_pred_y])

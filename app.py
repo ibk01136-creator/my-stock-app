@@ -38,7 +38,7 @@ def calculate_bands(data, type_name):
     ma = tp.rolling(window=20).mean()
     std = tp.rolling(window=20).std()
     res = {f"{type_name} 중심": ma}
-    for s in [2.0, 1.6, 1.0]:
+    for s in [2.0, 1.6, 1.2]:
         res[f"{type_name} {s}상"] = ma + (std * s)
         res[f"{type_name} {s}하"] = ma - (std * s)
     return res
@@ -65,6 +65,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             # 예측 영역 라벨 추가 (+1일 등)
             date_labels += [f"+{j}" for j in range(1, 10)]
 
+        
             # 주봉 위치 계산
             this_w_idx = w_raw.index[-1]
             prev_w_idx = w_raw.index[-2]
@@ -89,7 +90,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             # 1. 일봉 렌더링
             for key in d_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
-                color = 'purple' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
+                color = 'purple' if '중심' in key else (c_up[[2.0, 1.6, 1.2].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.2].index(std_val)])
                 y_vals = d_bands[key].iloc[-DISPLAY_DAYS:].tolist()
                 fig.add_trace(go.Scatter(x=list(range(DISPLAY_DAYS)), y=y_vals, name=key, line=dict(color=color, width=1)))
                 
@@ -101,7 +102,7 @@ for i, (name, ticker) in enumerate(STOCKS.items()):
             # 2. 주봉 렌더링
             for key in w_bands:
                 std_val = float(key.split()[1][:-1]) if '중심' not in key else 0
-                color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.0].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.0].index(std_val)])
+                color = '#BA55D3' if '중심' in key else (c_up[[2.0, 1.6, 1.2].index(std_val)] if '상' in key else c_lo[[2.0, 1.6, 1.2].index(std_val)])
                 w_x, w_y = [], []
                 for w_dt, val in w_bands[key].items():
                     if w_dt in d_recent.index:
